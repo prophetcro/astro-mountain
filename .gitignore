@@ -1,0 +1,33 @@
+# 构建 / 打包产物
+dist/
+
+# 运行产物（Markdown / CSV / JSON 报告、抖音竖图）
+reports/
+
+# 磁盘缓存（SQLite 落盘）
+.cache_astro/
+.cache_astro.sqlite*
+legacy/.cache_astro.sqlite*
+
+# 一次性探针遗留库（开发期排障用）
+.pytest_cache_probe.sqlite
+
+# parity 回放模式录制的原始响应（本地生成）
+.parity_records/
+
+# requests_cache 的 SQLite 副文件（WAL / 共享内存）
+requests_cache*.sqlite-wal
+requests_cache*.sqlite-shm
+
+# Python 字节码缓存（legacy/ 下的对照实现运行时产生）
+__pycache__/
+*.py[cod]
+
+# macOS 元数据
+.DS_Store
+
+# 本地配置（可能含 API 密钥，勿提交；用 config.example.json 作模板，或 --init-config 生成）
+configs/config.json
+
+# WorkBuddy 运行时记忆（含本地排障笔记，勿提交）
+.workbuddy/
