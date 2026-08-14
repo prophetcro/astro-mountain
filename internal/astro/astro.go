@@ -135,3 +135,32 @@ func Compute(localDT time.Time, utcOffsetSec int, lat, lon, darkSunAlt float64) 
 		AstroDark:     sunAlt <= darkSunAlt,
 	}
 }
+
+// SunriseTime 返回本地日历日 morningDate 当天（当地时区）的日出本地时刻，
+// 即太阳地平高度由负转正的首个时刻（忽略大气折射）。
+//
+// lat/lon 为站点坐标；utcOffsetSec 为当地 UTC 偏移秒数，用于把本地时间换算回 UTC 求太阳位置。
+// 扫描 morningDate 当天 03:00–09:00 本地、步长 1 分钟，期间线性插值在过零处求精确时刻。
+// ok=false 表示扫描区间内未出现日出（极地等极端情形），调用方应退回全夜统计或标记无数据。
+func SunriseTime(lat, lon float64, utcOffsetSec int, morningDate time.Time) (time.Time, bool) {
+	loc := time.FixedZone("local", utcOffsetSec)
+	start := time.Date(morningDate.Year(), morningDate.Month(), morningDate.Day(), 3, 0, 0, 0, loc)
+	end := time.Date(morningDate.Year(), morningDate.Month(), morningDate.Day(), 9, 0, 0, 0, loc)
+
+	var prevT time.Time
+	prevAlt := math.NaN()
+	for t := start; !t.After(end); t = t.Add(time.Minute) {
+		info := Compute(t, utcOffsetSec, lat, lon, -12)
+		if t.Equal(start) {
+			prevT, prevAlt = t, info.SunAlt
+			continue
+		}
+		if prevAlt < 0 && info.SunAlt >= 0 {
+			// prevT→t 之间太阳高度线性过零，插值求精确日出时刻。
+			frac := prevAlt / (prevAlt - info.SunAlt)
+			return prevT.Add(time.Duration(frac * float64(time.Minute))), true
+		}
+		prevT, prevAlt = t, info.SunAlt
+	}
+	return time.Time{}, false
+}

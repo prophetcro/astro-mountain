@@ -23,6 +23,9 @@ requests_cache*.sqlite-shm
 __pycache__/
 *.py[cod]
 
+# 旧 Python 对照实现（开发期参照，非 Go 工程一部分，勿提交）
+legacy/
+
 # macOS 元数据
 .DS_Store
 

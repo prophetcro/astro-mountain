@@ -197,7 +197,7 @@ func TestMDCellEscapesPipe(t *testing.T) {
 
 func TestComputeSiteNightStats(t *testing.T) {
 	cfg := config.Default()
-	st := ComputeSiteNightStats("牵牛岗", "2026-08-13", testRows(), nil, cfg)
+	st := ComputeSiteNightStats("牵牛岗", "2026-08-13", testRows(), nil, cfg, [2]time.Time{})
 	if st.Planned != 3 || st.Valid != 3 || st.Missing != 0 {
 		t.Fatalf("时次统计 = planned %d / valid %d / missing %d", st.Planned, st.Valid, st.Missing)
 	}
@@ -217,7 +217,7 @@ func TestComputeSiteNightStats(t *testing.T) {
 		t.Fatalf("云底 AGL 区间 = %+v ~ %+v", st.BaseAGLMin, st.BaseAGLMax)
 	}
 
-	empty := ComputeSiteNightStats("不存在的点位", "2026-08-13", testRows(), nil, cfg)
+	empty := ComputeSiteNightStats("不存在的点位", "2026-08-13", testRows(), nil, cfg, [2]time.Time{})
 	if empty.Valid != 0 || empty.Verdict != "❓ 无有效预报，请临近再跑" {
 		t.Fatalf("空统计 = %+v", empty)
 	}
@@ -281,7 +281,7 @@ func TestMainReasonBadWinsOverWarn(t *testing.T) {
 			model.RATING_BAD, model.REL_SEA_BELOW,
 			"能见度 150m，辐射雾（静风 0.3m/s，天亮前最重）"),
 	}
-	st := ComputeSiteNightStats("牵牛岗", "2026-08-12", rows, nil, cfg)
+	st := ComputeSiteNightStats("牵牛岗", "2026-08-12", rows, nil, cfg, [2]time.Time{})
 	if st.OK != 0 || st.Warn != 0 || st.Bad != 5 {
 		t.Fatalf("统计口径错：ok=%d warn=%d bad=%d", st.OK, st.Warn, st.Bad)
 	}
@@ -311,7 +311,7 @@ func TestMainReasonHardVetoWinsOverLCL(t *testing.T) {
 			model.RATING_BAD, model.REL_IN_CLOUD,
 			"机位在云中，无法拍摄；降水 2.0mm，降水天气码 63，不宜拍摄"),
 	}
-	st := ComputeSiteNightStats("X", "2026-08-12", rows, nil, cfg)
+	st := ComputeSiteNightStats("X", "2026-08-12", rows, nil, cfg, [2]time.Time{})
 	if st.MainReason != "浓雾（能见度<1000m）" {
 		t.Fatalf("主要诱因 = %q，want %q（硬否决必须覆盖软辅助的结露/LCL）",
 			st.MainReason, "浓雾（能见度<1000m）")
@@ -334,7 +334,7 @@ func TestMainReasonSeverityTiebreak(t *testing.T) {
 			model.RATING_BAD, model.REL_IN_CLOUD,
 			"机位在云中，无法拍摄（云顶还在头顶 250m）"),
 	}
-	st := ComputeSiteNightStats("A", "2026-08-12", rows, nil, cfg)
+	st := ComputeSiteNightStats("A", "2026-08-12", rows, nil, cfg, [2]time.Time{})
 
 	if st.MainReason != "机位在云中" {
 		t.Fatalf("同频次严重度 tie-break 失败：%q", st.MainReason)
@@ -349,7 +349,7 @@ func TestMainReasonAllOKReturnsEmpty(t *testing.T) {
 		mkReasonRow("OK", 1000, "2026-08-12T23:00", 23, "2026-08-12",
 			model.RATING_OK, model.REL_SEA_BELOW, "云海在脚下，头顶通透，最佳拍摄条件"),
 	}
-	st := ComputeSiteNightStats("OK", "2026-08-12", rows, nil, cfg)
+	st := ComputeSiteNightStats("OK", "2026-08-12", rows, nil, cfg, [2]time.Time{})
 	if st.MainReason != "" {
 		t.Fatalf("全 OK 时主要诱因必须为空，实际 %q", st.MainReason)
 	}
@@ -375,7 +375,7 @@ func TestMainReasonBadWinsOverMoreFrequentWarn(t *testing.T) {
 			model.RATING_WARN, model.REL_OVERHEAD,
 			"高云量 95%（8km 以上卷云），头顶薄卷云，星野略受损"),
 	}
-	st := ComputeSiteNightStats("X", "2026-08-12", rows, nil, cfg)
+	st := ComputeSiteNightStats("X", "2026-08-12", rows, nil, cfg, [2]time.Time{})
 	if st.MainReason != "降水 / 雷暴" {
 		t.Fatalf("1 BAD 降水 vs 4 WARN 薄云：主要诱因必须报降水（硬否决），实际 %q", st.MainReason)
 	}
@@ -389,7 +389,7 @@ func TestMainReasonFallsBackToWarn(t *testing.T) {
 		mkReasonRow("W", 1000, "2026-08-12T23:00", 23, "2026-08-12",
 			model.RATING_WARN, model.REL_OVERHEAD, "中云量 85%（3–8km，剖面之外），成片中云盖顶，星野受损"),
 	}
-	st := ComputeSiteNightStats("W", "2026-08-12", rows, nil, cfg)
+	st := ComputeSiteNightStats("W", "2026-08-12", rows, nil, cfg, [2]time.Time{})
 	if st.MainReason != "中云盖顶（3–8km）" {
 		t.Fatalf("仅 WARN 时应统计 WARN，实际 %q", st.MainReason)
 	}
@@ -431,7 +431,7 @@ func TestCrossModelCoreWindowCountsConsensusHours(t *testing.T) {
 		_ = i
 	}
 
-	st := ComputeSiteNightStats("K", "2026-08-12", rows, compare, cfg)
+	st := ComputeSiteNightStats("K", "2026-08-12", rows, compare, cfg, [2]time.Time{})
 	if st.CrossOK != 2 {
 		t.Fatalf("核心窗口共识时次数 = %d, want 2（23:00 与 01:00 两模型都通透）；"+
 			"旧实现会把 TimeShort %q 解析成小时 8 而漏判全部共识时次", st.CrossOK, "08-12 23:00")

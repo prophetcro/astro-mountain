@@ -65,6 +65,11 @@ type WindowConfig struct {
 	NightEndHour   int `json:"night_end_hour"`
 	CoreStartHour  int `json:"core_start_hour"`
 	CoreEndHour    int `json:"core_end_hour"`
+
+	// SunriseWindowBeforeMin / SunriseWindowAfterMin 定义「日出拍摄窗口」相对日出的前后余量（分钟）。
+	// 报告「日出窗云海」列只统计落在该窗口内的时次，反映日出前后机位下方云海状况。
+	SunriseWindowBeforeMin int `json:"sunrise_window_before_min"`
+	SunriseWindowAfterMin  int `json:"sunrise_window_after_min"`
 }
 
 // Thresholds 汇总所有判定阈值：云量、湿度、能见度、云层几何、露点与天文条件。

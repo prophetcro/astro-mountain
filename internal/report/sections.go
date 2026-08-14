@@ -157,7 +157,8 @@ func mdNightlySection(rows []model.HourRow, compare []model.ModelCompareRow,
 		cells := make([]string, 0, len(nights)+1)
 		cells = append(cells, site.Name)
 		for _, night := range nights {
-			st := ComputeSiteNightStats(site.Name, night, rows, compare, cfg)
+			sw, _ := SunriseWindowForNight(site, night, int(meta.UTCOffsetHours*3600), cfg)
+			st := ComputeSiteNightStats(site.Name, night, rows, compare, cfg, sw)
 			if st.Valid == 0 {
 				cells = append(cells, "无数据")
 				continue
@@ -276,7 +277,7 @@ func mdDetailSection(rows []model.HourRow, compare []model.ModelCompareRow,
 	}
 
 	headers := []string{"点位", "海拔m", "有效h", "通透h", "风险h", "不宜h",
-		"最佳连续通透窗口", "云底AGL范围m", "云顶AGL范围m", "主要状态", "云海", "主要诱因", "结论"}
+		"最佳连续通透窗口", "云底AGL范围m", "云顶AGL范围m", "主要状态", "日出窗云海", "主要诱因", "结论"}
 
 	for _, night := range nights {
 		lines = append(lines,
@@ -285,7 +286,8 @@ func mdDetailSection(rows []model.HourRow, compare []model.ModelCompareRow,
 
 		nightRows := make([][]string, 0, len(sites))
 		for _, site := range sites {
-			st := ComputeSiteNightStats(site.Name, night, rows, compare, cfg)
+			sw, _ := SunriseWindowForNight(site, night, int(meta.UTCOffsetHours*3600), cfg)
+			st := ComputeSiteNightStats(site.Name, night, rows, compare, cfg, sw)
 			relLabel := MissingCell
 			if st.DominantRelation != "" {
 				if label, ok := model.RelLabels[st.DominantRelation]; ok {
@@ -313,6 +315,11 @@ func mdDetailSection(rows []model.HourRow, compare []model.ModelCompareRow,
 			})
 		}
 		lines = append(lines, MDTable(headers, nightRows)...)
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf(
+			"> 「日出窗云海」仅统计日出前后各 %d/%d 分钟窗口内的云海状况（见配置 `sunrise_window_before_min`/`after_min`），"+
+				"反映日出拍摄时分的机位下方云海，而非整夜。窗口内无采样时次则记「无」。",
+			cfg.Window.SunriseWindowBeforeMin, cfg.Window.SunriseWindowAfterMin))
 		lines = append(lines, "")
 	}
 

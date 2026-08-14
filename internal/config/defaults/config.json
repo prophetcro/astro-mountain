@@ -29,7 +29,9 @@
     "night_start_hour": 22,
     "night_end_hour": 6,
     "core_start_hour": 23,
-    "core_end_hour": 5
+    "core_end_hour": 5,
+    "sunrise_window_before_min": 45,
+    "sunrise_window_after_min": 30
   },
   "thresholds": {
     "cloud_cover_threshold": 40.0,

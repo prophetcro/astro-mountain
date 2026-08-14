@@ -213,7 +213,7 @@ func PrintOverview(w io.Writer, rows []model.HourRow, compare []model.ModelCompa
 				cells = append(cells, Pad("无数据", 12, AlignRight))
 				continue
 			}
-			st := ComputeSiteNightStats(site.Name, night, rows, compare, cfg)
+			st := ComputeSiteNightStats(site.Name, night, rows, compare, cfg, [2]time.Time{})
 			ok := st.OK
 			if hasCompare {
 				ok = st.CrossOK

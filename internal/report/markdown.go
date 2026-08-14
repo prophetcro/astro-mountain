@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/prophetcro/astro-mountain/internal/astro"
 	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/model"
 )
@@ -265,7 +267,7 @@ type SiteNightStats struct {
 }
 
 func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
-	compare []model.ModelCompareRow, cfg config.Config) SiteNightStats {
+	compare []model.ModelCompareRow, cfg config.Config, sunriseWin [2]time.Time) SiteNightStats {
 
 	st := SiteNightStats{Site: siteName, Night: night, BestWindow: "无"}
 
@@ -337,10 +339,14 @@ func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
 
 	st.MainReason = mainReason(valid)
 
-	// 有无云海（夜间级聚合）：任一有效核心时次机位下方存在连续云面即记「有」；
+	// 有无云海（日出窗口聚合）：仅统计落在「日出拍摄窗口」内的有效时次，
+	// 反映日出前后机位下方云海状况，而非整夜。窗口为零值（未提供）时退回全夜统计。
 	// 若所有云海时次都被山顶雾/降水压成不宜，则标注「被遮蔽」，与「主要状态」解耦。
 	seaTotal, seaVisible := 0, 0
 	for _, r := range valid {
+		if !inSunriseWindow(r.Time, sunriseWin) {
+			continue
+		}
 		if r.CloudSea == "有" {
 			seaTotal++
 			if r.Rating == model.RATING_OK {
@@ -370,6 +376,53 @@ func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
 		st.Verdict = "🔴 建议放弃该点位"
 	}
 	return st
+}
+
+// inSunriseWindow 判断时刻 t 是否落在日出拍摄窗口内。
+// 窗口为零值（未提供日出时刻）时返回 true，即退回「全夜计入」，供不关心窗口的调用方使用。
+func inSunriseWindow(t time.Time, w [2]time.Time) bool {
+	if w[0].IsZero() && w[1].IsZero() {
+		return true
+	}
+	return t.After(w[0]) && t.Before(w[1])
+}
+
+// SunriseWindowForNight 计算点位 site 在观测夜 night 对应的「日出拍摄窗口」。
+//
+// night 为傍晚日期（如 2026-08-12），日出发生在其次日清晨，故以 night+1 作为 morningDate
+// 传入 astro.SunriseTime。窗口 = [日出 - beforeMin, 日出 + afterMin]，前后余量由 cfg 控制。
+// 返回 [start, end] 与 ok；ok=false 表示未求得日出（如极地），调用方应退回全夜统计或标记无数据。
+func SunriseWindowForNight(site model.Site, night string, utcOffsetSec int, cfg config.Config) ([2]time.Time, bool) {
+	y, m, d, err := parseNightDate(night)
+	if err != nil {
+		return [2]time.Time{}, false
+	}
+	morning := time.Date(y, m, d+1, 0, 0, 0, 0, time.UTC)
+	sr, ok := astro.SunriseTime(site.Lat, site.Lon, utcOffsetSec, morning)
+	if !ok {
+		return [2]time.Time{}, false
+	}
+	before := cfg.Window.SunriseWindowBeforeMin
+	after := cfg.Window.SunriseWindowAfterMin
+	if before < 0 {
+		before = 0
+	}
+	if after < 0 {
+		after = 0
+	}
+	return [2]time.Time{
+		sr.Add(-time.Duration(before) * time.Minute),
+		sr.Add(time.Duration(after) * time.Minute),
+	}, true
+}
+
+// parseNightDate 把 "2006-01-02" 形式的观测夜字符串解析为年月日。
+func parseNightDate(s string) (year int, month time.Month, day int, err error) {
+	t, e := time.Parse("2006-01-02", s)
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	return t.Year(), t.Month(), t.Day(), nil
 }
 
 // parseHourShort 把 "22:00" 或 "2026-08-12T22:00" 里的整点解析出来。
