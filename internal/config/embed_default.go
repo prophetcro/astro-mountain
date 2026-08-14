@@ -8,6 +8,10 @@ import _ "embed"
 // internal/config/defaults/ 下。它不是 configs/ 的平级副本，而是派生物：
 // 仓库根 configs/ 是唯一真相源，defaults/ 由 build.sh 在编译前从 configs/ 重新生成。
 
+// 重新生成 embed 源：configs/ 是唯一真相源，defaults/ 由其派生。
+// 脱离 build.sh 时可用 `go generate ./internal/config` 重建，避免裸 go build 失败。
+//go:generate sh -c "cp ../../configs/config.example.json defaults/config.json && cp ../../configs/sites.json defaults/sites.json"
+
 //go:embed defaults/sites.json
 var defaultSitesJSON []byte
 
