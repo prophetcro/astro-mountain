@@ -93,13 +93,15 @@ func TestCollectCloudSeaEpisodesForNight_Basic(t *testing.T) {
 
 	// NightIDOf(07:00) = 07:00 - 12h = 19:00 = "2026-09-15"，
 	// 但 InNightWindow(7) 在默认 [22,6] 下为 false，所以 07:00 被排除。
+	// 末小时为 06:00，End 取「最后一小时的结束」= 07:00，跨度 8h 与 HoursCount 一致。
 	wantStart := time.Date(2026, 9, 15, 23, 0, 0, 0, time.UTC)
-	wantEnd := time.Date(2026, 9, 16, 6, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 9, 16, 7, 0, 0, 0, time.UTC)
 	if !ep.Start.Equal(wantStart) {
 		t.Errorf("Start = %s，期望 %s", ep.Start.Format(time.RFC3339), wantStart.Format(time.RFC3339))
 	}
 	if !ep.End.Equal(wantEnd) {
-		t.Errorf("End = %s，期望 %s", ep.End.Format(time.RFC3339), wantEnd.Format(time.RFC3339))
+		t.Errorf("End = %s，期望 %s（末小时 06:00 的结束时刻，跨度应=8h）",
+			ep.End.Format(time.RFC3339), wantEnd.Format(time.RFC3339))
 	}
 
 	// 云顶距机位高差：DetectLayers 在 900hPa 有云、850hPa 无云的形态下，
@@ -145,5 +147,50 @@ func TestCollectCloudSeaEpisodesForNight_WrongNight(t *testing.T) {
 	episodes := CollectCloudSeaEpisodesForNight(site, resp, "2099-01-01", cfg)
 	if len(episodes) != 0 {
 		t.Errorf("日期不匹配应返回空，实际 %d 个 episode", len(episodes))
+	}
+}
+
+// TestCollectCloudSeaEpisodesForNight_EndBoundary 锁死 off-by-one 修复：
+// End 必须是「最后一小时的结束时刻」(Start+1h)，使「出现→消散」跨度 == HoursCount。
+// 修复前单小时时段会显示 23:00→23:00（跨度 0），与 HoursCount=1 自相矛盾；
+// 多小时时段也会少算 1 小时（如 22:00→01:00 实为 4 小时却看着像 3 小时）。
+func TestCollectCloudSeaEpisodesForNight_EndBoundary(t *testing.T) {
+	cfg := config.Default()
+	resp := makeCloudSeaResp(t)
+	// 只保留 idx0(23:00) 与 idx3(02:00) 的 900hPa 云，其余清零 → 两个孤立单小时云海。
+	cc := resp.Series["cloud_cover_900hPa"]
+	for i := range cc {
+		if i != 0 && i != 3 {
+			cc[i] = model.Num(0)
+		}
+	}
+	resp.Series["cloud_cover_900hPa"] = cc
+
+	site := Site{Name: "牛草山", Lat: 31.047, Lon: 116.259, Alt: 1442}
+	episodes := CollectCloudSeaEpisodesForNight(site, resp, "2026-09-15", cfg)
+	if len(episodes) != 2 {
+		t.Fatalf("应得到 2 个孤立单小时 episode，实际 %d", len(episodes))
+	}
+	for i, ep := range episodes {
+		if ep.HoursCount != 1 {
+			t.Errorf("episode[%d].HoursCount = %d，期望 1", i, ep.HoursCount)
+		}
+		if !ep.End.Equal(ep.Start.Add(time.Hour)) {
+			t.Errorf("episode[%d] End(%s) 应 = Start(%s)+1h，跨度才与 HoursCount 一致",
+				i, ep.End.Format("15:04"), ep.Start.Format("15:04"))
+		}
+	}
+	// 时段1 应为 23:00→00:00，时段2 应为 02:00→03:00。
+	if got := episodes[0].Start.Format("15:04"); got != "23:00" {
+		t.Errorf("episode[0].Start = %s，期望 23:00", got)
+	}
+	if got := episodes[0].End.Format("15:04"); got != "00:00" {
+		t.Errorf("episode[0].End = %s，期望 00:00（修复前会误显 23:00）", got)
+	}
+	if got := episodes[1].Start.Format("15:04"); got != "02:00" {
+		t.Errorf("episode[1].Start = %s，期望 02:00", got)
+	}
+	if got := episodes[1].End.Format("15:04"); got != "03:00" {
+		t.Errorf("episode[1].End = %s，期望 03:00", got)
 	}
 }

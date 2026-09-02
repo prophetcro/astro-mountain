@@ -86,35 +86,42 @@ func CollectCloudSeaEpisodesForNight(site Site, resp *api.Response,
 	sort.Slice(snaps, func(i, j int) bool { return snaps[i].t.Before(snaps[j].t) })
 
 	// 合并：相邻 1h 间隔视为连续时段；间隔 ≥ 2h 则切分。
+	// End 取「最后一小时的结束时刻」(lastSnap + 1h)，这样「出现→消散」跨度 = 实际小时数，
+	// 与 HoursCount 一致：1 小时时段显示 23:00→00:00（而非 23:00→23:00），
+	// N 小时时段显示 Start→(lastSnap+1h)。gap 判定以 lastT（最后一小时起点）为锚，
+	// 避免 End 加了 1h 后把 2h 真实间隔误判成连续。
 	const maxGapHours = 1
 	eps := make([]report.CloudSeaEpisode, 0, 2)
 	cur := report.CloudSeaEpisode{
 		Start:         snaps[0].t,
-		End:           snaps[0].t,
+		End:           snaps[0].t.Add(time.Hour),
 		TopMSL:        snaps[0].topMSL,
 		TopAGL:        siteAlt - snaps[0].topMSL,
 		Submerged:     snaps[0].topMSL > siteAlt,
 		PeakThickness: snaps[0].thick,
 		HoursCount:    1,
 	}
+	lastT := snaps[0].t
 	for i := 1; i < len(snaps); i++ {
 		s := snaps[i]
-		gap := s.t.Sub(cur.End).Hours()
+		gap := s.t.Sub(lastT).Hours()
 		if gap > float64(maxGapHours)+0.1 {
 			eps = append(eps, cur)
 			cur = report.CloudSeaEpisode{
 				Start:         s.t,
-				End:           s.t,
+				End:           s.t.Add(time.Hour),
 				TopMSL:        s.topMSL,
 				TopAGL:        siteAlt - s.topMSL,
 				Submerged:     s.topMSL > siteAlt,
 				PeakThickness: s.thick,
 				HoursCount:    1,
 			}
+			lastT = s.t
 			continue
 		}
-		cur.End = s.t
+		cur.End = s.t.Add(time.Hour)
 		cur.HoursCount++
+		lastT = s.t
 		if s.topMSL > cur.TopMSL {
 			cur.TopMSL = s.topMSL
 			cur.TopAGL = siteAlt - s.topMSL
