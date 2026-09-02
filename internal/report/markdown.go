@@ -103,7 +103,7 @@ func mdCrossModelSection(compare []model.ModelCompareRow, cfg config.Config) []s
 	)
 
 	type siteSum struct {
-		site                              string
+		site                                              string
 		iconOK, gfsOK, bothOK, iconOnly, gfsOnly, bothBad int
 	}
 	sums := make(map[string]*siteSum, 8)
@@ -262,7 +262,14 @@ type SiteNightStats struct {
 	Verdict          string
 	MainReason       string
 
-	// CloudSea 夜间级「有无云海」聚合：有 / 有（被山顶雾/降水遮蔽） / 无。
+	// InCloudHours 机位在云中的时次数（REL_IN_CLOUD 普通埋云 / REL_SEA_BELOW_IN_CLOUD
+	// 高山云海淹没机位）。用于「主要状态」列在众数为全层无云时加注限定，避免
+	// "全层无云"被误读为整夜干净——这少数时次正是把结论拉离「可去」的致命短板。
+	InCloudHours int
+
+	// CloudSea 夜间级「日出窗云海」聚合：有 / 有（被山顶雾/降水遮蔽） / 辐射雾 / 无。
+	// 「辐射雾」档：日出窗内 note 含"辐射雾"字样（贴地+静风+晴夜少云的雾场景）。
+	// 优先级：云海可见 > 辐射雾遮蔽 > 其他遮蔽 > 无。
 	CloudSea string
 }
 
@@ -329,6 +336,17 @@ func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
 		st.TopAGLMin, st.TopAGLMax = minMax(tops)
 	}
 
+	// 统计机位在云中的时次（REL_IN_CLOUD 普通埋云 / REL_SEA_BELOW_IN_CLOUD 高山云海
+	// 淹没机位），供「主要状态」列在众数为全层无云时加注限定。
+	for _, r := range valid {
+		if !r.Relation.Valid {
+			continue
+		}
+		if r.Relation.V == model.REL_IN_CLOUD || r.Relation.V == model.REL_SEA_BELOW_IN_CLOUD {
+			st.InCloudHours++
+		}
+	}
+
 	effectiveOK := st.OK
 	if hasCompare {
 		effectiveOK = st.CrossOK
@@ -339,10 +357,17 @@ func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
 
 	st.MainReason = mainReason(valid)
 
-	// 有无云海（日出窗口聚合）：仅统计落在「日出拍摄窗口」内的有效时次，
+	// 日出窗云海聚合：仅统计落在「日出拍摄窗口」内的有效时次，
 	// 反映日出前后机位下方云海状况，而非整夜。窗口为零值（未提供）时退回全夜统计。
-	// 若所有云海时次都被山顶雾/降水压成不宜，则标注「被遮蔽」，与「主要状态」解耦。
-	seaTotal, seaVisible := 0, 0
+	// 与「主要状态/主要诱因」解耦，单独列示。
+	// 优先级：可见云海+辐射雾兼具 > 云海可见 > 辐射雾遮蔽 > 其他遮蔽 > 无。
+	// 「辐射雾」档：note 含"辐射雾"（贴地+静风+晴夜少云的雾场景，由 profile
+	// applyFogVeto 的 fogKindText 或辐射雾豁免分支写入）时计入——告诉用户
+	// 日出窗是辐射雾贴地，日出后大概率消散可守候破云。
+	// 「辐射雾（云海）」档：窗口内既出现 OK 级可见云海时次、又出现辐射雾时次，
+	// 说明脚下云海与贴地辐射雾同框——静风、日出可守候破云与云海，最该守候的题材。
+	seaTotal, seaVisible, radFogHours := 0, 0, 0
+	var radBases, radTops []float64 // 窗口内辐射雾时次相对机位的云底/云顶 AGL（米）
 	for _, r := range valid {
 		if !inSunriseWindow(r.Time, sunriseWin) {
 			continue
@@ -353,14 +378,31 @@ func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
 				seaVisible++
 			}
 		}
+		if strings.Contains(r.Note, "辐射雾") {
+			radFogHours++
+			// 仅聚合"雾顶在机位之上(tops>=0)"的辐射雾时次——即雾覆盖/包裹机位、
+			// 你身处雾中的几何，这正是拍辐射雾要判断的高度。排除纯"云海在脚下"
+			// (雾全在机下, tops<0) 时次，避免其厚云层几何把括号高度拉偏、与主要
+			// 状态"机位在云中"给出的机上高度矛盾。
+			if r.CloudTopAGL.Valid && r.CloudTopAGL.V >= 0 {
+				if r.CloudBaseAGL.Valid {
+					radBases = append(radBases, r.CloudBaseAGL.V)
+				}
+				radTops = append(radTops, r.CloudTopAGL.V)
+			}
+		}
 	}
 	switch {
-	case seaTotal == 0:
-		st.CloudSea = "无"
+	case seaVisible > 0 && radFogHours > 0:
+		st.CloudSea = radFogLabel("云海", radBases, radTops)
 	case seaVisible > 0:
 		st.CloudSea = "有"
-	default:
+	case radFogHours > 0:
+		st.CloudSea = radFogLabel("", radBases, radTops)
+	case seaTotal > 0:
 		st.CloudSea = "有（被山顶雾/降水遮蔽）"
+	default:
+		st.CloudSea = "无"
 	}
 
 	switch {
@@ -384,7 +426,13 @@ func inSunriseWindow(t time.Time, w [2]time.Time) bool {
 	if w[0].IsZero() && w[1].IsZero() {
 		return true
 	}
-	return t.After(w[0]) && t.Before(w[1])
+	// r.Time 以 UTC 承载本地墙钟（见 internal/api/response.go），
+	// sunriseWin 以本地时区(+8 等)承载同一本地墙钟；二者时区不同，
+	// 直接比较绝对瞬间会整体误判。统一剥去时区、保留墙钟再比。
+	tc := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, time.UTC)
+	w0 := time.Date(w[0].Year(), w[0].Month(), w[0].Day(), w[0].Hour(), w[0].Minute(), 0, 0, time.UTC)
+	w1 := time.Date(w[1].Year(), w[1].Month(), w[1].Day(), w[1].Hour(), w[1].Minute(), 0, 0, time.UTC)
+	return tc.After(w0) && tc.Before(w1)
 }
 
 // SunriseWindowForNight 计算点位 site 在观测夜 night 对应的「日出拍摄窗口」。
@@ -446,6 +494,24 @@ func dominantRelation(rows []model.HourRow) string {
 		}
 	}
 	return best
+}
+
+// RelationLabel 返回「主要状态」列的展示文案。
+// DominantRelation 是整夜几何关系的众数（出现最多那档）。当众数为 REL_CLEAR（全层无云）
+// 但夜里有 N 个时次机位仍在云中（REL_IN_CLOUD / REL_SEA_BELOW_IN_CLOUD）时，加注限定，
+// 避免"全层无云"被误读为整夜干净——这少数时次正是把结论拉离「可去」的致命短板。
+func RelationLabel(st SiteNightStats) string {
+	if st.DominantRelation == "" {
+		return MissingCell
+	}
+	label, ok := model.RelLabels[st.DominantRelation]
+	if !ok {
+		return MissingCell
+	}
+	if st.DominantRelation == model.REL_CLEAR && st.InCloudHours > 0 {
+		return fmt.Sprintf("全层无云（多数时次，%d 时次机位在云中）", st.InCloudHours)
+	}
+	return label
 }
 
 func reasonCategory(note string) string {
@@ -557,4 +623,71 @@ func fmtRange(low, high model.OptFloat, hasValid bool) string {
 		return FormatG(low.V)
 	}
 	return FormatG(low.V) + " ~ " + FormatG(high.V)
+}
+
+// radFogLabel 为「日出窗云海」列的辐射雾档生成标签。
+// extra 用于额外上下文（如"云海"表示脚下云海与辐射雾同框）；
+// bases/tops 为窗口内辐射雾时次相对机位的云底/云顶 AGL（米，负=机下、正=机上），
+// 用于在括号里给出辐射雾层相对机位的高度范围，便于判断无人机能否飞出雾顶、
+// 起降是否在雾中。无有效高度数据时退回纯"辐射雾"。
+func radFogLabel(extra string, bases, tops []float64) string {
+	span := radFogSpan(bases, tops)
+	parts := make([]string, 0, 2)
+	if extra != "" {
+		parts = append(parts, extra)
+	}
+	if span != "" {
+		parts = append(parts, span)
+	}
+	if len(parts) == 0 {
+		return "辐射雾"
+	}
+	return "辐射雾（" + strings.Join(parts, "·") + "）"
+}
+
+// radFogSpan 据窗口内辐射雾时次的云底/云顶 AGL，给出雾层相对机位的高度范围文字。
+// 返回空串表示无有效高度数据（不附加括号）。
+func radFogSpan(bases, tops []float64) string {
+	var lo, hi float64
+	have := false
+	for _, v := range bases {
+		if !have {
+			lo, hi = v, v
+			have = true
+			continue
+		}
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+	for _, v := range tops {
+		if !have {
+			lo, hi = v, v
+			have = true
+			continue
+		}
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+	if !have {
+		return ""
+	}
+	// lo/hi 相对机位 AGL：负=机下，正=机上。
+	switch {
+	case lo < 0 && hi > 0:
+		return fmt.Sprintf("机下%.0fm·机上%.0fm", -lo, hi)
+	case hi <= 0:
+		// 全在机下：lo、hi 均≤0，lo 更负。范围由浅(-hi)到深(-lo)。
+		return fmt.Sprintf("机下%.0f~%.0fm", -hi, -lo)
+	default:
+		// 全在机上：lo≥0。
+		return fmt.Sprintf("机上%.0f~%.0fm", lo, hi)
+	}
 }

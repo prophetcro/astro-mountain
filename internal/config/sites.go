@@ -41,7 +41,7 @@ func (r SitesResult) Enabled() []Site {
 	return out
 }
 
-// DefaultSites 返回内置的 19 个默认点位（华东站点 + 星辰山 + 白鹤尖 + 东白山 + 金华山·北山）。
+// DefaultSites 返回内置的 20 个默认点位（华东站点 + 星辰山 + 白鹤尖 + 东白山 + 金华山·北山 + 廿四尖）。
 //
 // 内置数据在编译期嵌入，解析失败属于构建产物损坏，直接 panic 而非返回错误。
 func DefaultSites() []Site {

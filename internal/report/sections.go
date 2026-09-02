@@ -288,12 +288,7 @@ func mdDetailSection(rows []model.HourRow, compare []model.ModelCompareRow,
 		for _, site := range sites {
 			sw, _ := SunriseWindowForNight(site, night, int(meta.UTCOffsetHours*3600), cfg)
 			st := ComputeSiteNightStats(site.Name, night, rows, compare, cfg, sw)
-			relLabel := MissingCell
-			if st.DominantRelation != "" {
-				if label, ok := model.RelLabels[st.DominantRelation]; ok {
-					relLabel = label
-				}
-			}
+			relLabel := RelationLabel(st)
 			okStr := strconv.Itoa(st.OK)
 			if len(compare) > 0 {
 				okStr = fmt.Sprintf("%d(%d)", st.CrossOK, st.OK)
@@ -318,7 +313,12 @@ func mdDetailSection(rows []model.HourRow, compare []model.ModelCompareRow,
 		lines = append(lines, "")
 		lines = append(lines, fmt.Sprintf(
 			"> 「日出窗云海」仅统计日出前后各 %d/%d 分钟窗口内的云海状况（见配置 `sunrise_window_before_min`/`after_min`），"+
-				"反映日出拍摄时分的机位下方云海，而非整夜。窗口内无采样时次则记「无」。",
+				"反映日出拍摄时分的机位下方云海，而非整夜。窗口内无采样时次则记「无」；"+
+				"日出窗内若被辐射雾（贴地+静风+晴夜少云）遮蔽，则记「辐射雾」；"+
+				"若窗口内同时出现 OK 级可见云海时次与辐射雾时次，则记「辐射雾（云海）」，"+
+				"提示脚下云海与贴地辐射雾同框、静风、日出后大概率消散，可守候破云与云海。"+
+				"辐射雾档括号内给出雾层相对机位的高度范围（机下Xm·机上Ym；全在机下记机下a~bm，"+
+				"全在机上记机上a~bm），据此判断无人机能否飞出雾顶、起降是否在雾中。",
 			cfg.Window.SunriseWindowBeforeMin, cfg.Window.SunriseWindowAfterMin))
 		lines = append(lines, "")
 	}

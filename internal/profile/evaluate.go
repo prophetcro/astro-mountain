@@ -84,6 +84,28 @@ func EvaluateHour(site model.Site, surface model.Surface, layers []CloudLayer,
 		}
 
 	case REL_IN_CLOUD:
+		aboveTop := keyLayer.TopMSL - siteAlt
+		belowBase := siteAlt - keyLayer.BaseMSL
+
+		// 高山云海形态：机位嵌在云层顶部附近、脚下是厚厚的云海。
+		// 几何上机位确实在云里（云顶还在头顶），但主导题材是脚下的云海，
+		// 不该一律判🔴——牛草山这类点位常年云海，机位恰好在云层上沿、
+		// 头顶只剩薄云，是出片的好时机。必须「脚下云够厚」且「头顶云够薄」同时满足，
+		// 否则仍是埋在厚云里。命中后改写关系为专属的 REL_SEA_BELOW_IN_CLOUD，
+		// 让报告「主要状态」直接呈现「云海在脚下（机位在云中）」而非笼统的「机位在云中」。
+		if belowBase >= t.CloudSeaBeneathDepthM && aboveTop <= t.CloudSeaAboveDepthM {
+			relation = REL_SEA_BELOW_IN_CLOUD
+			rating = RATING_WARN
+			notes = append(notes,
+				"云海在脚下（机位在云中）：云底在山脚约 "+
+					model.FormatFixed(belowBase, 0)+"m、云顶在头顶约 "+
+					model.FormatFixed(aboveTop, 0)+
+					"m，机位处在云层顶部附近，是高山云海典型形态；"+
+					"可守候云隙破云，但稳定性差、山顶大概率有雾凇/湿雾")
+			break
+		}
+
+		// 普通「机位埋在云中」：只靠湿度判出来的薄层给风险，成云给不宜。
 		// 只靠湿度判出来的层，且近地湿度还没到雾的量级，视为「可能起雾」而非坐实在云里。
 		soft := keyLayer.RHOnly(t) && !rh2m.GE(t.FogProxyRHHigh)
 		if soft {
@@ -92,9 +114,8 @@ func EvaluateHour(site model.Site, surface model.Surface, layers []CloudLayer,
 				model.FormatFixed(keyLayer.MaxCC, 0)+"%），有起雾/低云风险，需现场确认")
 		} else {
 			rating = RATING_BAD
-			aboveTop := model.RoundToInt(keyLayer.TopMSL - siteAlt)
 			notes = append(notes, "机位在云中，无法拍摄（云顶还在头顶 "+
-				itoa(aboveTop)+"m）")
+				itoa(model.RoundToInt(aboveTop))+"m）")
 		}
 
 	default:
@@ -141,6 +162,18 @@ func EvaluateHour(site model.Site, surface model.Surface, layers []CloudLayer,
 
 	rating, notes = applyFogVeto(surface, t, rating, notes)
 
+	// 辐射雾豁免：辐射雾是贴地雾（静风、晴夜辐射冷却形成），
+	// 当机位在雾顶之上（脚下云海/云海淹没机位）时，雾会随日出消散，
+	// 是可守候的云海/雾海题材，不应被雾 veto 一棍子打成🔴。
+	// 仅对 REL_SEA_BELOW_IN_CLOUD（脚下云海）放行；
+	// 普通浓雾、机位埋在厚云中仍维持🔴。
+	if relation == REL_SEA_BELOW_IN_CLOUD && rating == RATING_BAD && isRadiationFog(surface, t) {
+		rating = RATING_WARN
+		notes = replaceLastNote(notes, "辐射雾",
+			"辐射雾贴地（静风、晴夜辐射冷却形成），清晨随日出消散；"+
+				"机位在雾顶之上，脚下为雾海/云海，可守候云隙破云与日出云海")
+	}
+
 	// 交叉校验：模式低云量与剖面结论矛盾时降级。
 	// 气压层之间的薄云、以及顶到机位的云海，都是剖面看不见的。
 	apiLow := surface.CloudCoverLow
@@ -162,9 +195,9 @@ func EvaluateHour(site model.Site, surface model.Surface, layers []CloudLayer,
 	}
 
 	// 结露与起雾提示：只影响拍摄准备，不改评级。
-	// 已经在云里就没必要再提「可能起雾」了。
+	// 已经在云里（或云海淹没机位）就没必要再提「可能起雾」了。
 	temp, dew := surface.Temperature2m, surface.DewPoint2m
-	if relation != REL_IN_CLOUD && temp.Valid && dew.Valid {
+	if relation != REL_IN_CLOUD && relation != REL_SEA_BELOW_IN_CLOUD && temp.Valid && dew.Valid {
 		spread := temp.V - dew.V
 		if spread < t.DewSpreadC {
 			notes = append(notes, "温露差 "+model.FormatFixed(spread, 1)+"℃，镜头结露风险")
@@ -235,25 +268,13 @@ func applyPrecipVeto(surface model.Surface, rating string, notes []string) (stri
 // 能见度缺测时才退用近地相对湿度作代理判据，其可信度低于能见度。
 func applyFogVeto(surface model.Surface, t config.Thresholds, rating string, notes []string) (string, []string) {
 	vis := surface.Visibility
-	wind := surface.WindSpeed10m
 	rh2m := surface.RelativeHumidity2m
-
-	// 用风速区分雾的成因，直接影响「能不能等它散」的判断。
-	fogKind := func() string {
-		if !wind.Valid {
-			return "有雾"
-		}
-		if wind.V < t.FogCalmWindMS {
-			return "辐射雾（静风 " + model.FormatFixed(wind.V, 1) + "m/s，天亮前最重）"
-		}
-		return "平流雾/低云压顶（风 " + model.FormatFixed(wind.V, 1) + "m/s）"
-	}
 
 	if vis.Valid {
 		switch {
 		case vis.V < t.FogVisibilityM:
 			rating = RATING_BAD
-			notes = append(notes, "能见度 "+itoa(model.RoundToInt(vis.V))+"m，"+fogKind())
+			notes = append(notes, "能见度 "+itoa(model.RoundToInt(vis.V))+"m，"+fogKindText(surface, t))
 		case vis.V < t.HazeVisibilityM:
 			rating = model.Worse(rating, RATING_WARN)
 			notes = append(notes, "能见度 "+itoa(model.RoundToInt(vis.V))+"m，轻雾/霾")
@@ -262,11 +283,52 @@ func applyFogVeto(surface model.Surface, t config.Thresholds, rating string, not
 		switch {
 		case rh2m.V >= t.FogProxyRHHigh:
 			rating = RATING_BAD
-			notes = append(notes, "近地RH "+model.FormatFixed(rh2m.V, 0)+"%(代理判据)，"+fogKind())
+			notes = append(notes, "近地RH "+model.FormatFixed(rh2m.V, 0)+"%(代理判据)，"+fogKindText(surface, t))
 		case rh2m.V >= t.FogProxyRHWarn:
 			rating = model.Worse(rating, RATING_WARN)
 			notes = append(notes, "近地RH "+model.FormatFixed(rh2m.V, 0)+"%(代理判据)，起雾风险")
 		}
 	}
 	return rating, notes
+}
+
+// fogKindText 按风速区分雾的成因，直接影响「能不能等它散」的判断。
+func fogKindText(surface model.Surface, t config.Thresholds) string {
+	wind := surface.WindSpeed10m
+	if !wind.Valid {
+		return "有雾"
+	}
+	if wind.V < t.FogCalmWindMS {
+		return "辐射雾（静风 " + model.FormatFixed(wind.V, 1) + "m/s，天亮前最重）"
+	}
+	return "平流雾/低云压顶（风 " + model.FormatFixed(wind.V, 1) + "m/s）"
+}
+
+// isRadiationFog 判断是否为辐射雾：静风（同 fogKindText 的判定）且中/高云不厚，
+// 即晴夜地面辐射冷却形成的贴地雾。中高云偏多会抑制辐射冷却，倾向平流/层云雾；
+// 中高云缺测时不排除，保守保留辐射雾可能。
+func isRadiationFog(surface model.Surface, t config.Thresholds) bool {
+	wind := surface.WindSpeed10m
+	if !wind.Valid || wind.V >= t.FogCalmWindMS {
+		return false
+	}
+	if c := surface.CloudCoverMid; c.Valid && c.V >= t.RadiationFogMidHighCC {
+		return false
+	}
+	if c := surface.CloudCoverHigh; c.Valid && c.V >= t.RadiationFogMidHighCC {
+		return false
+	}
+	return true
+}
+
+// replaceLastNote 把 notes 中最后一句含 needle 的说明替换为 replacement；
+// 找不到时直接追加。用于雾 veto 降级后，把辐射雾的消极措辞改写为积极指引。
+func replaceLastNote(notes []string, needle, replacement string) []string {
+	for i := len(notes) - 1; i >= 0; i-- {
+		if strings.Contains(notes[i], needle) {
+			notes[i] = replacement
+			return notes
+		}
+	}
+	return append(notes, replacement)
 }

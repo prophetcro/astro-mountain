@@ -411,7 +411,7 @@ func (s *state) saveSites() error {
 func (s *state) exportDefaultSites() error {
 	u := s.u
 	u.blank()
-	u.info("把内置的 19 个默认点位导出到文件，用于把配置改坏后一键恢复。")
+	u.info("把内置的 20 个默认点位导出到文件，用于把配置改坏后一键恢复。")
 	path, err := u.askText("导出到", s.sitesPath, nil)
 	if err != nil {
 		return err

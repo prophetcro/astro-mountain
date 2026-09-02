@@ -10,7 +10,11 @@ import _ "embed"
 
 // 重新生成 embed 源：configs/ 是唯一真相源，defaults/ 由其派生。
 // 脱离 build.sh 时可用 `go generate ./internal/config` 重建，避免裸 go build 失败。
-//go:generate sh -c "cp ../../configs/config.example.json defaults/config.json && cp ../../configs/sites.json defaults/sites.json"
+//
+// mkdir -p 不能省：defaults/*.json 已被 .gitignore 排除，全新 clone 后这个目录
+// 本身不存在（go:generate 的工作目录是包目录 internal/config/，故此处用相对路径
+// defaults），裸 cp 会因父目录缺失而失败，导致裸 go build 一并断裂。
+//go:generate sh -c "mkdir -p defaults && cp ../../configs/config.example.json defaults/config.json && cp ../../configs/sites.json defaults/sites.json"
 
 //go:embed defaults/sites.json
 var defaultSitesJSON []byte

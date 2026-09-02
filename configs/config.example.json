@@ -49,6 +49,8 @@
     "cloud_sea_max_depth_m": 1500.0,
     "profile_lowcloud_crosscheck": 40.0,
     "cloud_sea_suspect_lowcloud": 85.0,
+    "cloud_sea_beneath_depth_m": 600.0,
+    "cloud_sea_above_depth_m": 500.0,
     "mid_cloud_veil_cc": 80.0,
     "high_cloud_thin_veil_cc": 80.0,
     "dew_spread_c": 3.0,
@@ -56,7 +58,11 @@
     "lcl_alert_agl_m": 100.0,
     "astro_dark_sun_alt": -18.0,
     "moon_bright_illum": 0.3,
-    "cloud_crosscheck_delta_m": 800.0
+    "cloud_crosscheck_delta_m": 800.0,
+    "radiation_fog_midhigh_cc": 40.0,
+    "cloud_sea_prev_night_precip_mm": 1.0,
+    "cloud_sea_calm_wind_ms": 5.4,
+    "cloud_sea_inversion_blh_m": 800.0
   },
   "output": {
     "out_dir": "./reports",

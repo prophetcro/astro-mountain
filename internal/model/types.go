@@ -159,6 +159,12 @@ const (
 // REL_BASE_BELOW_UNKNOWN 云底低于机位，脚下云海与机位在云中无法区分。
 const REL_BASE_BELOW_UNKNOWN = "BASE_BELOW_UNKNOWN"
 
+// REL_SEA_BELOW_IN_CLOUD 云海淹没机位：机位嵌在云层顶部附近（头顶只剩薄云）、
+// 脚下是厚厚的云海。几何上机位确实在云里（云顶还在头顶），但主导题材是脚下的云海，
+// 应按高山云海场景给机会（⚠️）而非一律判废（🔴）。由 profile.EvaluateHour 在
+// REL_IN_CLOUD 分支内、确认「脚下云够厚且头顶云够薄」后改写关系得出。
+const REL_SEA_BELOW_IN_CLOUD = "SEA_BELOW_IN_CLOUD"
+
 // RelLabels 把关系标签映射为中文展示文案。
 var RelLabels = map[string]string{
 	REL_CLEAR:              "全层无云",
@@ -167,6 +173,7 @@ var RelLabels = map[string]string{
 	REL_OVERHEAD:           "云在头顶",
 	REL_NODATA:             "无数据",
 	REL_BASE_BELOW_UNKNOWN: "云底低于机位（脚下云海/机位在云中不可判）",
+	REL_SEA_BELOW_IN_CLOUD: "云海在脚下（机位在云中）",
 }
 
 // Site 表示一个观测站点及其静态元数据。

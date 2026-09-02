@@ -411,7 +411,8 @@ func SummariseSiteNight(siteName string, rows []model.HourRow,
 	case effectiveOK > 0:
 		detail = "最佳连续窗口 " + LongestRun(core, model.RATING_OK)
 		for _, r := range ok {
-			if r.Relation.Valid && r.Relation.V == model.REL_SEA_BELOW {
+			if r.Relation.Valid && (r.Relation.V == model.REL_SEA_BELOW ||
+				r.Relation.V == model.REL_SEA_BELOW_IN_CLOUD) {
 				detail += "，其间出现云海在脚下"
 				break
 			}
@@ -426,14 +427,24 @@ func SummariseSiteNight(siteName string, rows []model.HourRow,
 		verdict = "⚠️ 有机会但不稳定"
 	default:
 		inCloud := 0
+		seaInCloud := 0
 		for _, r := range bad {
-			if r.Relation.Valid && r.Relation.V == model.REL_IN_CLOUD {
+			if !r.Relation.Valid {
+				continue
+			}
+			switch r.Relation.V {
+			case model.REL_IN_CLOUD:
 				inCloud++
+			case model.REL_SEA_BELOW_IN_CLOUD:
+				seaInCloud++
 			}
 		}
-		if inCloud > 0 {
+		switch {
+		case seaInCloud > 0 && inCloud == 0:
+			detail = fmt.Sprintf("其中 %dh 机位在云中（脚下有云海）", seaInCloud)
+		case inCloud > 0:
 			detail = fmt.Sprintf("其中 %dh 机位在云中", inCloud)
-		} else {
+		default:
 			detail = "全程头顶有云"
 		}
 		verdict = "🔴 建议放弃该点位"

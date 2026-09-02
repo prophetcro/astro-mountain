@@ -93,6 +93,13 @@ type Thresholds struct {
 	ProfileLowcloudCrossChk float64 `json:"profile_lowcloud_crosscheck"`
 	CloudSeaSuspectLowcloud float64 `json:"cloud_sea_suspect_lowcloud"`
 
+	// 云海淹没机位：机位嵌在云层里（REL_IN_CLOUD），但云底远低于机位、云顶仅略高于机位时，
+	// 是高山云海「脚下是海、机位在云层顶部附近」的典型形态，不该一律判🔴。
+	// 仅当「脚下云厚 >= CloudSeaBeneathDepthM」且「头顶云厚 <= CloudSeaAboveDepthM」
+	// 同时满足才降为⚠️，否则仍按「机位埋在云中」判🔴。
+	CloudSeaBeneathDepthM float64 `json:"cloud_sea_beneath_depth_m"`
+	CloudSeaAboveDepthM   float64 `json:"cloud_sea_above_depth_m"`
+
 	MidCloudVeilCC float64 `json:"mid_cloud_veil_cc"`
 
 	HighCloudThinVeilCC float64 `json:"high_cloud_thin_veil_cc"`
@@ -105,6 +112,24 @@ type Thresholds struct {
 	MoonBrightIllum float64 `json:"moon_bright_illum"`
 
 	CloudCrosscheckDeltaM float64 `json:"cloud_crosscheck_delta_m"`
+
+	// RadiationFogMidHighCC 是识别辐射雾的中/高云量上限：
+	// 静风且中高云低于该值时判为辐射雾（贴地、晴夜辐射冷却形成），
+	// 否则倾向平流雾/层云雾。中高云缺测时不排除，保守保留辐射雾可能。
+	RadiationFogMidHighCC float64 `json:"radiation_fog_midhigh_cc"`
+
+	// 云海成因加权：几何判定出云海后，用云海四要素（前晚降水 / 转晴 / 静风 / 逆温）
+	// 给可信度加权，结果写入「主要诱因」列，不改变几何判定本身。
+	// 阈值全部可在 config.json 覆盖。
+	//
+	// CloudSeaPrevNightPrecipMM：前晚累计降水量达到该值即视为「前晚有雨」成因命中。
+	CloudSeaPrevNightPrecipMM float64 `json:"cloud_sea_prev_night_precip_mm"`
+	// CloudSeaCalmWindMS：风力 ≤ 该值视为「静风(≤3级)」成因命中，
+	// 默认 5.4 m/s 对应蒲福风级 3 级上限（"风力≤3级"）。
+	// 与 fog_calm_wind_ms（辐射雾/平流雾成因区分，气象上需更严）相互独立。
+	CloudSeaCalmWindMS float64 `json:"cloud_sea_calm_wind_ms"`
+	// CloudSeaInversionBLHM：边界层高度低于该值视为存在逆温（稳定层结），成因命中。
+	CloudSeaInversionBLHM float64 `json:"cloud_sea_inversion_blh_m"`
 }
 
 // OutputConfig 控制产物输出：报告目录、抖音图目录与默认预报天数。

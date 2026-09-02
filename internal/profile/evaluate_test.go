@@ -647,3 +647,168 @@ func TestEvaluateHourEmptyLevelsHazeWarns(t *testing.T) {
 		t.Fatalf("轻雾说明未出现，实际：%s", ev.Note)
 	}
 }
+
+// niucaoSite 是牛草山：alt=1442m，常年云海，机位常嵌在云层上沿。
+func niucaoSite() model.Site {
+	return model.Site{Name: "牛草山", Lat: 31.047, Lon: 116.259, Alt: 1442.0}
+}
+
+// 用构造好的云层直接喂给 EvaluateHour，绕开 BuildProfile/DetectLayers，
+// 以便精准控制「机位在云中」的几何形态。levels 必须非空，否则会走缺测短路。
+func evalWithLayers(t *testing.T, site model.Site, layers []CloudLayer, surface model.Surface) Evaluation {
+	t.Helper()
+	th := testThresholds()
+	// 非空 levels 仅用于跳过 len(levels)==0 的缺测短路；主判定只看 layers。
+	return EvaluateHour(site, surface, layers, []Level{{Pressure: 1000}}, th)
+}
+
+func clearInCloudSurface() model.Surface {
+	return model.Surface{
+		Temperature2m:      model.Num(12.0),
+		DewPoint2m:         model.Num(6.0),
+		RelativeHumidity2m: model.Num(70.0),
+		Visibility:         model.Num(20000),
+	}
+}
+
+// 牛草山形态：机位在云层顶部附近（云底在山脚 53m、云顶 1613m），
+// 脚下是厚云海、头顶只剩薄云——应识别为「云海在脚下（机位在云中）」并降为⚠️。
+func TestEvaluateHourInCloudButSeaBelow(t *testing.T) {
+	layers := []CloudLayer{
+		{BaseMSL: 53, TopMSL: 1613, MaxCC: 90},
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, clearInCloudSurface())
+
+	if ev.Relation != REL_SEA_BELOW_IN_CLOUD {
+		t.Fatalf("关系为 %q，应为 %q（说明 %q）", ev.Relation, REL_SEA_BELOW_IN_CLOUD, ev.Note)
+	}
+	if ev.Rating != RATING_WARN {
+		t.Fatalf("高山云海形态评级为 %q，必须降为 %q（说明：%s）",
+			ev.Rating, RATING_WARN, ev.Note)
+	}
+	if !strings.Contains(ev.Note, "云海在脚下（机位在云中）") {
+		t.Fatalf("说明未点名「云海在脚下（机位在云中）」，实际：%s", ev.Note)
+	}
+	if strings.Contains(ev.Note, "无法拍摄") {
+		t.Fatalf("高山云海形态不应给「无法拍摄」，实际：%s", ev.Note)
+	}
+}
+
+// 机位埋在厚云中部（below 仅 142m、above 158m），并非云海在脚下——应保持🔴。
+func TestEvaluateHourBuriedInCloudStaysBad(t *testing.T) {
+	layers := []CloudLayer{
+		{BaseMSL: 1300, TopMSL: 1600, MaxCC: 90},
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, clearInCloudSurface())
+
+	if ev.Relation != REL_IN_CLOUD {
+		t.Fatalf("关系为 %q，want %q（说明 %q）", ev.Relation, REL_IN_CLOUD, ev.Note)
+	}
+	if ev.Rating != RATING_BAD {
+		t.Fatalf("机位埋在厚云中部却为 %q，必须保持 %q（说明：%s）",
+			ev.Rating, RATING_BAD, ev.Note)
+	}
+	if !strings.Contains(ev.Note, "无法拍摄") {
+		t.Fatalf("说明未给出「无法拍摄」，实际：%s", ev.Note)
+	}
+}
+
+// 阈边境：脚下云够厚，但头顶云也极厚（above=1558m 远超上限），
+// 这是实打实的厚云盖顶而非云海在脚下——应仍判🔴。
+func TestEvaluateHourThickOverheadStaysBad(t *testing.T) {
+	layers := []CloudLayer{
+		{BaseMSL: 53, TopMSL: 3000, MaxCC: 90},
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, clearInCloudSurface())
+
+	if ev.Relation != REL_IN_CLOUD {
+		t.Fatalf("关系为 %q，want %q（说明 %q）", ev.Relation, REL_IN_CLOUD, ev.Note)
+	}
+	if ev.Rating != RATING_BAD {
+		t.Fatalf("头顶厚云（above=1558m）却降为 %q，应仍 %q（说明：%s）",
+			ev.Rating, RATING_BAD, ev.Note)
+	}
+}
+
+// 辐射雾 + 脚下云海（机位在雾顶之上）：浓雾本应🔴，但辐射雾贴地、清晨散，
+// 且机位在雾之上，应豁免为⚠️，并把说明改写为积极指引（可守候云隙破云/日出云海）。
+func TestEvaluateHourRadiationFogSeaBelowExempts(t *testing.T) {
+	layers := []CloudLayer{{BaseMSL: 53, TopMSL: 1613, MaxCC: 90}}
+	surface := model.Surface{
+		Temperature2m:      model.Num(12.0),
+		DewPoint2m:         model.Num(11.8),
+		RelativeHumidity2m: model.Num(98.0), // 触发雾 veto（RH 代理）
+		Visibility:         model.Missing(),
+		WindSpeed10m:       model.Num(1.0),  // 静风 → 辐射雾
+		CloudCoverMid:      model.Num(10.0), // 晴夜少云
+		CloudCoverHigh:     model.Num(5.0),
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, surface)
+
+	if ev.Relation != REL_SEA_BELOW_IN_CLOUD {
+		t.Fatalf("关系应为 %q，实际 %q（说明 %q）", REL_SEA_BELOW_IN_CLOUD, ev.Relation, ev.Note)
+	}
+	if ev.Rating != RATING_WARN {
+		t.Fatalf("辐射雾+脚下云海评级为 %q，应豁免为 %q（说明：%s）", ev.Rating, RATING_WARN, ev.Note)
+	}
+	if !strings.Contains(ev.Note, "辐射雾贴地") {
+		t.Fatalf("豁免后应给出辐射雾积极指引，实际：%s", ev.Note)
+	}
+	if strings.Contains(ev.Note, "无法拍摄") {
+		t.Fatalf("辐射雾+脚下云海不应「无法拍摄」，实际：%s", ev.Note)
+	}
+}
+
+// 反例1：辐射雾但机位埋在厚云中部（非脚下云海）→ 不豁免，仍🔴。
+func TestEvaluateHourRadiationFogBuriedInCloudStillBad(t *testing.T) {
+	layers := []CloudLayer{{BaseMSL: 1300, TopMSL: 1600, MaxCC: 90}}
+	surface := model.Surface{
+		RelativeHumidity2m: model.Num(98.0),
+		Visibility:         model.Missing(),
+		WindSpeed10m:       model.Num(1.0),
+		CloudCoverMid:      model.Num(10.0),
+		CloudCoverHigh:     model.Num(5.0),
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, surface)
+	if ev.Relation != REL_IN_CLOUD {
+		t.Fatalf("关系应为 %q，实际 %q（说明 %q）", REL_IN_CLOUD, ev.Relation, ev.Note)
+	}
+	if ev.Rating != RATING_BAD {
+		t.Fatalf("辐射雾+机位埋厚云应为 %q（不豁免），实际 %q（说明：%s）",
+			RATING_BAD, ev.Rating, ev.Note)
+	}
+}
+
+// 反例2：有风（平流雾）+ 脚下云海 + 浓雾 → 不豁免，仍🔴。
+func TestEvaluateHourAdvectionFogSeaBelowStillBad(t *testing.T) {
+	layers := []CloudLayer{{BaseMSL: 53, TopMSL: 1613, MaxCC: 90}}
+	surface := model.Surface{
+		RelativeHumidity2m: model.Num(98.0),
+		Visibility:         model.Missing(),
+		WindSpeed10m:       model.Num(5.0), // 有风 → 平流雾
+		CloudCoverMid:      model.Num(10.0),
+		CloudCoverHigh:     model.Num(5.0),
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, surface)
+	if ev.Rating != RATING_BAD {
+		t.Fatalf("平流雾+脚下云海应为 %q（不豁免），实际 %q（说明：%s）",
+			RATING_BAD, ev.Rating, ev.Note)
+	}
+}
+
+// 反例3：静风但中/高云偏多（抑制辐射冷却）→ 不算辐射雾，不豁免，仍🔴。
+func TestEvaluateHourRadiationFogButCloudyStillBad(t *testing.T) {
+	layers := []CloudLayer{{BaseMSL: 53, TopMSL: 1613, MaxCC: 90}}
+	surface := model.Surface{
+		RelativeHumidity2m: model.Num(98.0),
+		Visibility:         model.Missing(),
+		WindSpeed10m:       model.Num(1.0),
+		CloudCoverMid:      model.Num(80.0), // 厚云盖顶，非晴夜辐射冷却
+		CloudCoverHigh:     model.Num(60.0),
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, surface)
+	if ev.Rating != RATING_BAD {
+		t.Fatalf("辐射雾但中高云多应为 %q（不豁免），实际 %q（说明：%s）",
+			RATING_BAD, ev.Rating, ev.Note)
+	}
+}

@@ -149,11 +149,14 @@ sync_config() {
   if [[ -f "$SCRIPT_DIR/tools/sync_config.sh" ]]; then
     bash "$SCRIPT_DIR/tools/sync_config.sh"
   else
-    # 兜底：脚本缺失时直接拷，避免构建整体失败
+    # 兜底：脚本缺失时直接拷，避免构建整体失败。
+    # 必须先 mkdir -p：defaults/*.json 已被 .gitignore 排除（configs/ 才是唯一真相源，
+    # defaults/ 是派生物），全新 clone 后这个目录本身不存在，裸 cp 会因父目录缺失而失败。
     # 开源仓只用无密钥的 config.example.json 生成 embed（config.json 含密钥、已 gitignore）
-    cp configs/config.example.json internal/config/defaults/config.json
-    cp configs/sites.json internal/config/defaults/sites.json
-    echo "    [sync] 兜底：直接 cp 覆盖 internal/config/defaults/"
+    mkdir -p "$DEFAULTS_DIR"
+    cp configs/config.example.json "$DEFAULTS_DIR/config.json"
+    cp configs/sites.json "$DEFAULTS_DIR/sites.json"
+    echo "    [sync] 兜底：直接 cp 覆盖 $DEFAULTS_DIR/"
   fi
 }
 sync_config

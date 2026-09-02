@@ -1,6 +1,8 @@
 package core
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/prophetcro/astro-mountain/internal/api"
@@ -82,6 +84,16 @@ func AnalyseSite(site Site, resp *api.Response, targetNights map[string]bool,
 		note := ev.Note
 		if nAbove < 2 {
 			note += "；机位以上可用气压层不足 2 个，云底/云顶分辨率低，置信度有限"
+		}
+
+		// 云海成因加权：几何上判出云海后，用四要素给可信度加权并写入说明。
+		// 几何判定（机位下方是否有连续云面）仍是云海有无的唯一权威，这里只负责
+		// 在「已判为有」时补成因可信度——成因齐备则高置信（典型云海条件），
+		// 仅几何成立但成因缺失则低置信（可能是零散低云、云面不稳定）。
+		if cloudSea == "有" {
+			prev := prevNightPrecipMM(resp, idx, cfg)
+			cause := assessCloudSeaCause(surface, ev.Relation, prev, cfg.Thresh)
+			note += "；" + cloudSeaCauseNote(cause)
 		}
 
 		// 低云量优先用 API 直给值；缺测时退而用廓线中 2500 m 以下的最大云量，
@@ -212,4 +224,126 @@ func nodataRow(site Site, localDT time.Time, night string, info astro.Info) Hour
 
 		Layers: []model.LayerInfo{},
 	}
+}
+
+// cloudSeaCause 汇总云海四要素的命中情况，给几何判定出的云海加权可信度。
+//
+// 四要素（用户给定的云海必要条件）：前晚下雨、第二天转晴、风力≤3级、有逆温层。
+// Score 为命中的成因数（0-4），Confidence 据此映射到 高/中/低。
+type cloudSeaCause struct {
+	PrevNightPrecipMM float64
+	HasRain           bool   // 前晚累计降水 >= 阈值
+	Cleared           bool   // 第二天转晴：机位上方通透（无云压顶）
+	WindCalm          bool   // 风力 ≤ 静风门槛(3级)
+	InversionLikely   bool   // 边界层高度低 → 逆温（稳定层结）可能
+	Score             int    // 命中的成因数（0-4）
+	Confidence        string // 高 / 中 / 低
+}
+
+// assessCloudSeaCause 根据当前小时地面要素与前晚降水量评估云海成因。
+func assessCloudSeaCause(surface model.Surface, relation string, prevPrecipMM float64, t config.Thresholds) cloudSeaCause {
+	c := cloudSeaCause{PrevNightPrecipMM: prevPrecipMM}
+	c.HasRain = prevPrecipMM >= t.CloudSeaPrevNightPrecipMM
+	c.Cleared = relation == model.REL_SEA_BELOW || relation == model.REL_SEA_BELOW_IN_CLOUD
+	if w := surface.WindSpeed10m; w.Valid {
+		c.WindCalm = w.V <= t.CloudSeaCalmWindMS
+	}
+	if blh := surface.BoundaryLayerHeight; blh.Valid {
+		c.InversionLikely = blh.V < t.CloudSeaInversionBLHM
+	}
+	c.Score = countTrue(c.HasRain, c.Cleared, c.WindCalm, c.InversionLikely)
+	c.Confidence = cloudSeaConfidence(c.Score)
+	return c
+}
+
+func countTrue(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
+}
+
+func cloudSeaConfidence(score int) string {
+	switch {
+	case score >= 4:
+		return "高"
+	case score >= 2:
+		return "中"
+	default:
+		return "低"
+	}
+}
+
+// cloudSeaCauseNote 把云海成因渲染成人话，写入「主要诱因」列。
+func cloudSeaCauseNote(c cloudSeaCause) string {
+	parts := make([]string, 0, 4)
+	if c.HasRain {
+		parts = append(parts, fmt.Sprintf("前晚降水%.1fmm✓", c.PrevNightPrecipMM))
+	} else {
+		parts = append(parts, "前晚无降水✗")
+	}
+	if c.WindCalm {
+		parts = append(parts, "静风(≤3级)✓")
+	} else {
+		parts = append(parts, "风力偏大✗")
+	}
+	if c.InversionLikely {
+		parts = append(parts, "逆温(边界层低)✓")
+	} else {
+		parts = append(parts, "无明显逆温✗")
+	}
+	if c.Cleared {
+		parts = append(parts, "头顶通透✓")
+	} else {
+		parts = append(parts, "头顶有云✗")
+	}
+	label := map[string]string{
+		"高": "高置信·典型云海条件",
+		"中": "中置信",
+		"低": "低置信·成因不足（可能为零散低云/云面不稳定）",
+	}[c.Confidence]
+	return "云海成因：" + strings.Join(parts, "、") + "，" + label
+}
+
+// prevNightPrecipMM 累计「前晚」降水量（mm）作为「前晚下雨」成因的代理。
+//
+// 统计范围：前一个观测夜的全部夜间小时 + 同夜但早于当前时刻的夜间小时。
+// 若数据窗口不含前一个观测夜（如只预报单夜），则退化为「入夜以来到当前时刻」的累计，
+// 仍能量化「拍摄前下过雨」这一成因。
+func prevNightPrecipMM(resp *api.Response, idx int, cfg config.Config) float64 {
+	if idx < 0 || idx >= len(resp.Times) {
+		return 0
+	}
+	cur := resp.Times[idx]
+	curNight := NightIDOf(cur)
+	prevNight := prevNightID(curNight)
+	sum := 0.0
+	for j, dt := range resp.Times {
+		if j == idx {
+			continue
+		}
+		if !InNightWindow(dt.Hour(), cfg.Window) {
+			continue
+		}
+		n := NightIDOf(dt)
+		count := n == curNight && dt.Before(cur) || n == prevNight
+		if !count {
+			continue
+		}
+		if p := resp.Surface(j).Precipitation; p.Valid {
+			sum += p.V
+		}
+	}
+	return sum
+}
+
+func prevNightID(curNight string) string {
+	t, err := time.Parse("2006-01-02", curNight)
+	if err != nil {
+		return ""
+	}
+	return t.AddDate(0, 0, -1).Format("2006-01-02")
 }

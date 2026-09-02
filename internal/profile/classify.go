@@ -4,11 +4,12 @@ import "github.com/prophetcro/astro-mountain/internal/model"
 
 // 云与机位的相对关系标签，转发自 model。
 const (
-	REL_CLEAR     = model.REL_CLEAR
-	REL_SEA_BELOW = model.REL_SEA_BELOW
-	REL_IN_CLOUD  = model.REL_IN_CLOUD
-	REL_OVERHEAD  = model.REL_OVERHEAD
-	REL_NODATA    = model.REL_NODATA
+	REL_CLEAR              = model.REL_CLEAR
+	REL_SEA_BELOW          = model.REL_SEA_BELOW
+	REL_IN_CLOUD           = model.REL_IN_CLOUD
+	REL_OVERHEAD           = model.REL_OVERHEAD
+	REL_NODATA             = model.REL_NODATA
+	REL_SEA_BELOW_IN_CLOUD = model.REL_SEA_BELOW_IN_CLOUD
 )
 
 // ClassifySite 判断机位与云层的相对关系，并给出决定该关系的关键层。

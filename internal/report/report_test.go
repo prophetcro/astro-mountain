@@ -229,6 +229,36 @@ func TestComputeSiteNightStats(t *testing.T) {
 	}
 }
 
+// 高山云海淹没机位（REL_SEA_BELOW_IN_CLOUD）且无浓雾时，报告「主要状态」必须呈现
+// 「云海在脚下（机位在云中）」而非笼统的「机位在云中」，结论给 ⚠️ 而非 🔴。
+func TestComputeSiteNightStatsSeaBelowInCloud(t *testing.T) {
+	cfg := config.Default()
+	mk := func(site string, hour int, night, rating, rel string, base, top float64) model.HourRow {
+		return model.HourRow{
+			Site: site, Hour: hour, Night: night, HasData: true,
+			Relation: model.Str(rel), Rating: rating,
+			CloudBaseAGL: model.Num(base), CloudTopAGL: model.Num(top),
+		}
+	}
+	rows := []model.HourRow{
+		mk("牛草山", 23, "2026-08-23", model.RATING_WARN, model.REL_SEA_BELOW_IN_CLOUD, -1389, 171),
+		mk("牛草山", 0, "2026-08-23", model.RATING_WARN, model.REL_SEA_BELOW_IN_CLOUD, -1389, 171),
+		mk("牛草山", 1, "2026-08-23", model.RATING_WARN, model.REL_SEA_BELOW_IN_CLOUD, -1389, 171),
+	}
+	st := ComputeSiteNightStats("牛草山", "2026-08-23", rows, nil, cfg, [2]time.Time{})
+
+	if st.DominantRelation != model.REL_SEA_BELOW_IN_CLOUD {
+		t.Fatalf("主要状态 = %q，want %q", st.DominantRelation, model.REL_SEA_BELOW_IN_CLOUD)
+	}
+	if label, ok := model.RelLabels[st.DominantRelation]; !ok || label != "云海在脚下（机位在云中）" {
+		t.Fatalf("主要状态标签 = %q，want %q", label, "云海在脚下（机位在云中）")
+	}
+	if st.Verdict != "⚠️ 有机会但不稳定" {
+		t.Fatalf("结论 = %q，want %q（非浓雾的高山云海应给机会，而非一律🔴）",
+			st.Verdict, "⚠️ 有机会但不稳定")
+	}
+}
+
 func TestReasonCategoryKeywords(t *testing.T) {
 	cases := []struct {
 		note string
@@ -745,5 +775,69 @@ func TestAnnotateRelation(t *testing.T) {
 		if got := annotateRelation(c.rel, c.reason); got != c.want {
 			t.Errorf("annotateRelation(%q,%q) = %q, want %q", c.rel, c.reason, got, c.want)
 		}
+	}
+}
+
+// TestRelationLabelClearWithInCloud 验证方案 A：众数为全层无云但存在机位在云中时次时，
+// 「主要状态」列加注限定，避免"全层无云"被误读为整夜干净。
+func TestRelationLabelClearWithInCloud(t *testing.T) {
+	// 众数无云 + 2 个机位在云中时次 → 加注限定
+	st := SiteNightStats{DominantRelation: model.REL_CLEAR, InCloudHours: 2}
+	if got := RelationLabel(st); got != "全层无云（多数时次，2 时次机位在云中）" {
+		t.Fatalf("RelationLabel = %q，want 限定版", got)
+	}
+	// 众数无云且无埋云时次 → 纯净标签
+	if got := RelationLabel(SiteNightStats{DominantRelation: model.REL_CLEAR}); got != "全层无云" {
+		t.Fatalf("RelationLabel(无埋云) = %q，want 全层无云", got)
+	}
+	// 众数非无云 → 原标签，绝不限定
+	st3 := SiteNightStats{DominantRelation: model.REL_IN_CLOUD, InCloudHours: 3}
+	if got := RelationLabel(st3); got != "机位在云中" {
+		t.Fatalf("RelationLabel(众数埋云) = %q，want 机位在云中", got)
+	}
+	// 高山云海淹没机位：标签本身已含"机位在云中"，不重复限定
+	if got := RelationLabel(SiteNightStats{DominantRelation: model.REL_SEA_BELOW_IN_CLOUD, InCloudHours: 2}); got != "云海在脚下（机位在云中）" {
+		t.Fatalf("RelationLabel(云海淹没) = %q，want 云海在脚下（机位在云中）", got)
+	}
+	// 无有效关系 → 缺测占位
+	if got := RelationLabel(SiteNightStats{}); got != MissingCell {
+		t.Fatalf("RelationLabel(空) = %q，want %q", got, MissingCell)
+	}
+}
+
+// TestComputeSiteNightStatsClearDominatesButInCloud 端到端验证：9-06 夜形态
+// （多数时次全层无云，但有少数时次机位埋云）下，DominantRelation / InCloudHours /
+// RelationLabel 三者联动正确。
+func TestComputeSiteNightStatsClearDominatesButInCloud(t *testing.T) {
+	mk := func(hour int, rating, rel string) model.HourRow {
+		return model.HourRow{
+			Site: "廿四尖", Lat: 28.95, Lon: 120.66, Alt: 1218.3,
+			TimeISO: fmt.Sprintf("2026-09-06T%02d:00", hour), Hour: hour,
+			Night: "2026-09-06", HasData: true,
+			LevelsTotal: 8, LevelsAbove: 3,
+			Relation: model.Str(rel), Rating: rating, Note: "测试",
+			CloudLow: model.Num(70), CloudLowSource: model.Str("model"),
+			CloudMid: model.Num(10), CloudHigh: model.Num(5),
+			WindMS: model.Num(1.8), BoundaryLayerHeight: model.Num(300),
+		}
+	}
+	rows := []model.HourRow{
+		mk(22, model.RATING_OK, model.REL_CLEAR),
+		mk(23, model.RATING_OK, model.REL_CLEAR),
+		mk(0, model.RATING_OK, model.REL_CLEAR),
+		mk(1, model.RATING_OK, model.REL_CLEAR),
+		mk(2, model.RATING_BAD, model.REL_IN_CLOUD),
+		mk(3, model.RATING_BAD, model.REL_IN_CLOUD),
+		mk(4, model.RATING_WARN, model.REL_OVERHEAD),
+	}
+	st := ComputeSiteNightStats("廿四尖", "2026-09-06", rows, nil, config.Default(), [2]time.Time{})
+	if st.DominantRelation != model.REL_CLEAR {
+		t.Fatalf("DominantRelation = %q，want REL_CLEAR（全层无云为众数）", st.DominantRelation)
+	}
+	if st.InCloudHours != 2 {
+		t.Fatalf("InCloudHours = %d，want 2", st.InCloudHours)
+	}
+	if got := RelationLabel(st); got != "全层无云（多数时次，2 时次机位在云中）" {
+		t.Fatalf("主要状态标签 = %q，want 限定版", got)
 	}
 }
