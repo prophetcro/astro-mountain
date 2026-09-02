@@ -14,20 +14,22 @@ import (
 const DateLayout = "2006-01-02"
 
 var businessFlags = map[string]bool{
-	"peak":      true,
-	"days":      true,
-	"start":     true,
-	"end":       true,
-	"models":    true,
-	"source":    true,
-	"sites":     true,
-	"out-dir":   true,
-	"csv":       true,
-	"json":      true,
-	"no-report": true,
-	"no-cache":  true,
-	"douyin":    true,
-	"no-douyin": true,
+	"peak":         true,
+	"days":         true,
+	"start":        true,
+	"end":          true,
+	"mode":         true,
+	"sunrise-date": true,
+	"models":       true,
+	"source":       true,
+	"sites":        true,
+	"out-dir":      true,
+	"csv":          true,
+	"json":         true,
+	"no-report":    true,
+	"no-cache":     true,
+	"douyin":       true,
+	"no-douyin":    true,
 }
 
 type Options struct {
@@ -35,6 +37,11 @@ type Options struct {
 	Days  int
 	Start string
 	End   string
+
+	// Mode 运行模式：空或 "meteor" 为流星雨（默认）；"sunrise" 为日出云海模式。
+	Mode  string
+	// SunriseDate 日出模式：所选日出当天日期 YYYY-MM-DD。
+	SunriseDate string
 
 	Source     string
 	Models     string
@@ -77,6 +84,9 @@ func newFlagSet(o *Options) *flag.FlagSet {
 	fs.IntVar(&o.Days, "days", -1, "配合 --peak：额外向前包含 N 天")
 	fs.StringVar(&o.Start, "start", "", "起始日期 YYYY-MM-DD")
 	fs.StringVar(&o.End, "end", "", "结束日期 YYYY-MM-DD")
+
+	fs.StringVar(&o.Mode, "mode", "", "运行模式 meteor|sunrise（默认 meteor 流星雨模式）")
+	fs.StringVar(&o.SunriseDate, "sunrise-date", "", "日出云海模式：日出当天日期 YYYY-MM-DD（配合 --mode sunrise）")
 
 	fs.StringVar(&o.Source, "source", "",
 		"数据源 openmeteo|tomorrow|meteoblue（默认 openmeteo）")
@@ -143,48 +153,58 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("--menu 与 --no-menu 不能同时使用：" +
 			"前者强制进交互菜单、后者强制直接执行，请只保留一个")
 	}
-	if o.Peak != "" && (o.Start != "" || o.End != "") {
-		return fmt.Errorf("--peak 与 --start/--end 不能同时使用：" +
-			"前者按极大日往前推算观测夜，后者是显式区间，请只保留一种方式")
+	if o.Mode == "sunrise" {
+		// 日出模式独占：以「日出当天」为锚，忽略 peak/start/end，不与它们混用。
+		if o.SunriseDate == "" {
+			return fmt.Errorf("--mode sunrise 必须配合 --sunrise-date（日出当天 YYYY-MM-DD）")
+		}
+		if _, err := parseDate("--sunrise-date", o.SunriseDate); err != nil {
+			return err
+		}
+	} else {
+		if o.Peak != "" && (o.Start != "" || o.End != "") {
+			return fmt.Errorf("--peak 与 --start/--end 不能同时使用：" +
+				"前者按极大日往前推算观测夜，后者是显式区间，请只保留一种方式")
+		}
+
+		if o.Peak != "" {
+			if _, err := parseDate("--peak", o.Peak); err != nil {
+				return err
+			}
+		}
+		var startT, endT time.Time
+		var err error
+		if o.Start != "" {
+			if startT, err = parseDate("--start", o.Start); err != nil {
+				return err
+			}
+		}
+		if o.End != "" {
+			if endT, err = parseDate("--end", o.End); err != nil {
+				return err
+			}
+		}
+
+		if (o.Start == "") != (o.End == "") {
+			return fmt.Errorf("--start 与 --end 必须成对出现：" +
+				"只给一端无法确定区间，若只想指定极大日请改用 --peak")
+		}
+		if o.Start != "" && o.End != "" && endT.Before(startT) {
+			return fmt.Errorf("--end（%s）不能早于 --start（%s）", o.End, o.Start)
+		}
+
+		if o.DaysSet && o.Days < 1 {
+			return fmt.Errorf("--days 必须 ≥ 1，当前为 %d。"+
+				"该参数表示在极大日基础上额外向前包含的天数", o.Days)
+		}
+		if o.DaysSet && o.Peak == "" {
+			return fmt.Errorf("--days 只在配合 --peak 时有意义，" +
+				"显式区间请直接用 --start/--end 控制长度")
+		}
 	}
 
 	if _, err := core.ParseSource(o.Source); err != nil {
 		return fmt.Errorf("--source %v", err)
-	}
-
-	if o.Peak != "" {
-		if _, err := parseDate("--peak", o.Peak); err != nil {
-			return err
-		}
-	}
-	var startT, endT time.Time
-	var err error
-	if o.Start != "" {
-		if startT, err = parseDate("--start", o.Start); err != nil {
-			return err
-		}
-	}
-	if o.End != "" {
-		if endT, err = parseDate("--end", o.End); err != nil {
-			return err
-		}
-	}
-
-	if (o.Start == "") != (o.End == "") {
-		return fmt.Errorf("--start 与 --end 必须成对出现：" +
-			"只给一端无法确定区间，若只想指定极大日请改用 --peak")
-	}
-	if o.Start != "" && o.End != "" && endT.Before(startT) {
-		return fmt.Errorf("--end（%s）不能早于 --start（%s）", o.End, o.Start)
-	}
-
-	if o.DaysSet && o.Days < 1 {
-		return fmt.Errorf("--days 必须 ≥ 1，当前为 %d。"+
-			"该参数表示在极大日基础上额外向前包含的天数", o.Days)
-	}
-	if o.DaysSet && o.Peak == "" {
-		return fmt.Errorf("--days 只在配合 --peak 时有意义，" +
-			"显式区间请直接用 --start/--end 控制长度")
 	}
 
 	return nil
@@ -257,11 +277,13 @@ func (o *Options) IsImplicitBatch(stdinIsTTY bool) bool {
 
 func (o *Options) BuildRunParams(cfg config.Config, stdout io.Writer) core.RunParams {
 	p := core.RunParams{
-		Peak:       o.Peak,
-		Days:       o.ResolveDays(cfg),
-		Start:      o.Start,
-		End:        o.End,
-		Source:     o.ResolveSource(),
+		Peak:        o.Peak,
+		Days:        o.ResolveDays(cfg),
+		Start:       o.Start,
+		End:         o.End,
+		Mode:        o.Mode,
+		SunriseDate: o.SunriseDate,
+		Source:      o.ResolveSource(),
 		Models:     o.Models,
 		Compare:    o.Compare,
 		NoCompare:  o.NoCrossModel,
@@ -275,6 +297,10 @@ func (o *Options) BuildRunParams(cfg config.Config, stdout io.Writer) core.RunPa
 		Stdout:     stdout,
 		Quiet:      o.Quiet,
 		Verbose:    o.Verbose,
+	}
+	if p.Mode == "sunrise" {
+		// 日出模式由 SunriseDate 锚定，不需要也不能回填 start/end 默认值。
+		return p
 	}
 	if p.Peak == "" && p.Start == "" && p.End == "" {
 		days := o.ResolveDays(cfg)

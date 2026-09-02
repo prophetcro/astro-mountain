@@ -85,6 +85,13 @@ func AnalyseSite(site Site, resp *api.Response, targetNights map[string]bool,
 		if nAbove < 2 {
 			note += "；机位以上可用气压层不足 2 个，云底/云顶分辨率低，置信度有限"
 		}
+		// 2026-09 模型缺层降级：覆盖机位的相邻层间距 > 500m 时（典型为 ECMWF/JMA 只给 4 层），
+		// 显式标注「模式垂直分辨率不足，云海判定置信度有限」。
+		// 这条比「无云海」更诚实——用户最恨静默失败。
+		if gap := profile.MaxGapAroundSite(levels, siteAlt); gap > 500 {
+			note += "；模式垂直分辨率不足（机位上下相邻层间距 " +
+				model.FormatFixed(gap, 0) + "m），云海判定置信度有限"
+		}
 
 		// 云海成因加权：几何上判出云海后，用四要素给可信度加权并写入说明。
 		// 几何判定（机位下方是否有连续云面）仍是云海有无的唯一权威，这里只负责

@@ -84,3 +84,32 @@ func MaxCCBelow(levels []Level, maxHeight float64) model.OptFloat {
 	}
 	return out
 }
+
+// MaxGapAroundSite 找出覆盖机位的「上下相邻两层」之间的最大间距（米）。
+//
+// 返回 0 表示机位恰好落在某层上或紧贴某层，没有插值盲区。
+// 返回 >500m 意味着机位海拔正好嵌在一段没有数据的真空中
+// （典型场景：ECMWF/JMA 只提供 1000/925/850/700 四层，925↔850 间距 ≈ 732m；
+// 8 层模式下 900↔850 间距 ≈ 493m），云海判定置信度有限。
+//
+// 11 层模式（加 875/825/750）下盲区已降到 ≤260m，
+// 故「数据垂直分辨率不足」的告警阈值取 500m：宽于 8 层最好值，
+// 严于 8 层最差值，对 ECMWF/JMA 仍能正确告警。
+func MaxGapAroundSite(levels []Level, siteAlt float64) float64 {
+	if len(levels) < 2 {
+		return 0
+	}
+	maxGap := 0.0
+	for i := 1; i < len(levels); i++ {
+		lower, upper := levels[i-1], levels[i]
+		// 机位严格夹在两层之间才算盲区：等号命中（机位与某层同高）不计入，
+		// 因为该层自身的位势高/云量就能覆盖机位，无需跨层插值。
+		if lower.Height < siteAlt && siteAlt < upper.Height {
+			gap := upper.Height - lower.Height
+			if gap > maxGap {
+				maxGap = gap
+			}
+		}
+	}
+	return maxGap
+}

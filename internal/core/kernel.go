@@ -91,6 +91,26 @@ func ResolveRange(p RunParams, w config.WindowConfig) (start, end time.Time,
 
 	nightWindow := fmt.Sprintf("每夜 %02d:00 → 次日 %02d:00", w.NightStartHour, w.NightEndHour)
 
+	// 日出云海模式：以「日出当天」为锚，分析其前一夜（含日出时分）。
+	// 抓数区间覆盖前一夜 00:00 到日出当天 +1 日 00:00，确保傍晚与清晨都被纳入；
+	// 观测夜 ID 取日出当天回拨一天（NightIDOf 口径）。
+	if p.Mode == "sunrise" {
+		if p.SunriseDate == "" {
+			return start, end, nil, "", fmt.Errorf("日出模式（--mode sunrise）必须指定 --sunrise-date（日出当天 YYYY-MM-DD）")
+		}
+		sd, perr := time.ParseInLocation(DateLayout, p.SunriseDate, time.UTC)
+		if perr != nil {
+			return start, end, nil, "", fmt.Errorf("--sunrise-date 日期格式应为 YYYY-MM-DD：%w", perr)
+		}
+		targetNight := sd.AddDate(0, 0, -1)
+		start = targetNight
+		end = sd.AddDate(0, 0, 1)
+		nights = []string{targetNight.Format(DateLayout)}
+		desc = fmt.Sprintf("%s 前一夜（含 %s 日出时分）共 1 夜（%s；日出当天 %s）",
+			targetNight.Format(DateLayout), sd.Format(DateLayout), nightWindow, p.SunriseDate)
+		return start, end, nights, desc, nil
+	}
+
 	if p.Peak != "" {
 		peak, perr := time.ParseInLocation(DateLayout, p.Peak, time.UTC)
 		if perr != nil {
@@ -187,6 +207,12 @@ func (e *Engine) Run(ctx context.Context, p RunParams) ExecResult {
 		res.ExitCode = 2
 		return res
 	}
+
+	// 日出云海模式走独立链路，不进入 HourRow / 双模型对比 / B·C 轨管线。
+	if p.Mode == "sunrise" {
+		return e.runSunrise(ctx, p, start, end, nights, nightsDesc)
+	}
+
 	if err := CheckForecastRange(start, end, e.now()); err != nil {
 		res.Errors = append(res.Errors, "参数错误："+err.Error())
 		res.ExitCode = 2
@@ -647,6 +673,173 @@ func (e *Engine) renderImages(res *ExecResult, p RunParams, outDir string) {
 	}
 	res.ImagePaths = paths
 	e.logf("已生成抖音竖图 %d 张（输出目录 %s）", len(paths), douyinDir)
+}
+
+// runSunrise 执行「日出云海模式」：取数 → 逐站点 BuildSunriseReport → 终端打印 → 写 Markdown。
+// 与流星雨模式互斥，单独走这一条链路，不进入 HourRow / 双模型对比 / B·C 轨管线。
+//
+// 日出模式必须用气压层剖面反演云海几何，因此强制 Open-Meteo（A 轨）；
+// 若调用方硬塞 Tomorrow.io / Meteoblue，直接中止（退出码 2），不拿空结果顶替。
+func (e *Engine) runSunrise(ctx context.Context, p RunParams,
+	start, end time.Time, nights []string, nightsDesc string) ExecResult {
+
+	var res ExecResult
+	if len(nights) == 0 {
+		res.Errors = append(res.Errors, "日出模式未解析出观测夜")
+		res.ExitCode = 2
+		return res
+	}
+	targetNight := nights[0]
+	sunriseDate, perr := time.ParseInLocation(DateLayout, p.SunriseDate, time.UTC)
+	if perr != nil {
+		res.Errors = append(res.Errors, "参数错误："+perr.Error())
+		res.ExitCode = 2
+		return res
+	}
+	if err := CheckForecastRange(start, end, e.now()); err != nil {
+		res.Errors = append(res.Errors, "参数错误："+err.Error())
+		res.ExitCode = 2
+		return res
+	}
+
+	if p.Source == SourceTomorrow || p.Source == SourceMeteoblue {
+		res.Errors = append(res.Errors,
+			"日出模式仅支持 Open-Meteo（A 轨，需要气压层剖面反演云海几何），"+
+				"--source tomorrow/meteoblue 在此模式下不可用")
+		res.ExitCode = 2
+		return res
+	}
+
+	// 放宽夜窗到含日出（NightEndHour→8），用配置副本，不改全局默认。
+	cfg := e.Cfg
+	if cfg.Window.NightEndHour < 8 {
+		cfg.Window.NightEndHour = 8
+	}
+
+	sites, warns, err := e.resolveSites(p)
+	res.Warnings = append(res.Warnings, warns...)
+	if err != nil {
+		res.Errors = append(res.Errors, err.Error())
+		res.ExitCode = 2
+		return res
+	}
+	if len(sites) == 0 {
+		res.Errors = append(res.Errors, "没有任何启用的观测点位")
+		res.ExitCode = 2
+		return res
+	}
+	res.Sites = sites
+
+	models := p.Models
+	if models == "" {
+		models = e.Cfg.API.Models
+	}
+	explicitModels := p.Models != ""
+	arriveBufferMin := e.Cfg.Window.ArriveBufferMin
+
+	client := e.Client
+	if client == nil {
+		client = api.New(e.Cfg.API, !p.NoCache, api.WithLogger(e.logf))
+	}
+
+	outDir := p.OutDir
+	if outDir == "" {
+		outDir = e.Cfg.Output.OutDir
+	}
+	if outDir == "" {
+		outDir = "reports"
+	}
+
+	repOffsetHours := 8.0
+	for _, site := range sites {
+		if ctx.Err() != nil {
+			res.Errors = append(res.Errors, "执行被取消："+ctx.Err().Error())
+			res.ExitCode = 1
+			return res
+		}
+		siteModels := models
+		if !explicitModels {
+			siteModels = api.ResolveModel(site.Region, models)
+		}
+		resp, _, ferr := client.FetchSite(ctx, site, start, end, siteModels)
+		if ferr != nil {
+			res.Warnings = append(res.Warnings,
+				fmt.Sprintf("[%s] 获取/解析失败：%v", site.Name, ferr))
+			continue
+		}
+		utcOffsetHours := float64(resp.UTCOffsetSeconds) / 3600.0
+		if utcOffsetHours != 0 {
+			repOffsetHours = utcOffsetHours
+		}
+		r := BuildSunriseReport(site, resp, targetNight, sunriseDate, cfg, resp.UTCOffsetSeconds, arriveBufferMin)
+		res.Sunrise = append(res.Sunrise, r)
+		e.logf("[%s] 日出模式聚合：云海 %dh / 朝霞 %s / 可信度 %s",
+			site.Name, r.CloudSeaHours, r.DawnGlow, r.Confidence)
+	}
+
+	if len(res.Sunrise) == 0 {
+		res.Errors = append(res.Errors,
+			"所有点位均无有效数据。请检查：网络是否可达 api.open-meteo.com、"+
+				"日期是否在预报范围内、--models 是否拼写正确。")
+		e.emitSunriseReport(&res, p, outDir)
+		res.ExitCode = 1
+		return res
+	}
+
+	meta := ReportMeta{
+		Mode:               "sunrise",
+		Models:             models,
+		Start:              p.SunriseDate,
+		End:                p.SunriseDate,
+		Nights:             nights,
+		NightsDesc:         nightsDesc,
+		Timezone:           e.Cfg.API.Timezone,
+		UTCOffsetHours:     repOffsetHours,
+		Sites:              sites,
+		GeneratedAt:        e.now().Format("2006-01-02 15:04:05"),
+		Source:             report.MetaSourceOpenMeteo,
+		Disclaimer:         "云海几何由气压层剖面反演；天文量为纯 Go 近似算法结果，均非观测实测值。",
+	}
+	if meta.Timezone == "" {
+		meta.Timezone = "Asia/Shanghai"
+	}
+	res.Meta = meta
+
+	if !p.Quiet {
+		w := p.Stdout
+		if w == nil {
+			w = e.Stdout
+		}
+		if w == nil {
+			w = os.Stdout
+		}
+		report.PrintSunriseReport(w, res.Sunrise, meta, e.Cfg)
+	}
+
+	e.emitSunriseReport(&res, p, outDir)
+	res.ExitCode = 0
+	return res
+}
+
+// emitSunriseReport 生成日出模式 Markdown 报告并把路径写回 res。
+// 与流星雨报告 emitReport 等价，但调用 WriteSunriseMarkdownReport。
+func (e *Engine) emitSunriseReport(res *ExecResult, p RunParams, outDir string) {
+	if p.NoReport {
+		e.logf("已指定 --no-report，跳过 Markdown 报告生成")
+		return
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		res.Warnings = append(res.Warnings,
+			fmt.Sprintf("Markdown 报告生成失败：创建目录 %s 失败：%v", outDir, err))
+		return
+	}
+	path, err := report.WriteSunriseMarkdownReport(res.Sunrise, res.Meta, e.Cfg, outDir)
+	if err != nil {
+		res.Warnings = append(res.Warnings, "Markdown 报告生成失败："+err.Error())
+		return
+	}
+	res.ReportPath = path
+	e.logf("已生成 Markdown 报告：%s", path)
 }
 
 // sortRows 按时间、站点名稳定排序，保证同一批输入每次产出的报告顺序一致。

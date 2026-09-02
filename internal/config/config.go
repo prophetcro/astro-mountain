@@ -70,6 +70,10 @@ type WindowConfig struct {
 	// 报告「日出窗云海」列只统计落在该窗口内的时次，反映日出前后机位下方云海状况。
 	SunriseWindowBeforeMin int `json:"sunrise_window_before_min"`
 	SunriseWindowAfterMin  int `json:"sunrise_window_after_min"`
+
+	// ArriveBufferMin 日出模式下「建议抵达机位时间」相对日出的总提前量（分钟）。
+	// 实际提前量 = ArriveBufferMin + 站点 DriveMinutes（车程）。默认 90。
+	ArriveBufferMin int `json:"arrive_buffer_min"`
 }
 
 // Thresholds 汇总所有判定阈值：云量、湿度、能见度、云层几何、露点与天文条件。

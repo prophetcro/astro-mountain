@@ -31,7 +31,8 @@
     "core_start_hour": 23,
     "core_end_hour": 5,
     "sunrise_window_before_min": 45,
-    "sunrise_window_after_min": 30
+    "sunrise_window_after_min": 30,
+    "arrive_buffer_min": 90
   },
   "thresholds": {
     "cloud_cover_threshold": 40.0,
@@ -48,9 +49,9 @@
     "min_level_height_msl": 0.0,
     "cloud_sea_max_depth_m": 1500.0,
     "profile_lowcloud_crosscheck": 40.0,
-    "cloud_sea_suspect_lowcloud": 85.0,
-    "cloud_sea_beneath_depth_m": 600.0,
-    "cloud_sea_above_depth_m": 500.0,
+"cloud_sea_suspect_lowcloud": 85.0,
+ "cloud_sea_beneath_depth_m": 200.0,
+ "cloud_sea_above_depth_m": 500.0,
     "mid_cloud_veil_cc": 80.0,
     "high_cloud_thin_veil_cc": 80.0,
     "dew_spread_c": 3.0,

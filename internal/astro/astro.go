@@ -90,6 +90,19 @@ func AltitudeDeg(jd, lat, lon, raDeg, decDeg float64) float64 {
 	return radToDeg(math.Asin(clamp(sinAlt, -1.0, 1.0)))
 }
 
+// AzimuthDeg 给定天体赤经赤纬，算其在 (lat, lon) 的地平方位角（度，自正北顺时针）。
+// 末段用 atan2 处理跨象限，结果落在 [0,360)。日出方位角用于判断朝霞方向的云是否被染红。
+func AzimuthDeg(jd, lat, lon, raDeg, decDeg float64) float64 {
+	lst := pyMod(GMSTDeg(jd)+lon, 360.0)
+	hourAngle := degToRad(pyMod(lst-raDeg, 360.0))
+	latR := degToRad(lat)
+	decR := degToRad(decDeg)
+	sinAz := -math.Cos(decR) * math.Sin(hourAngle)
+	cosAz := math.Sin(decR)*math.Cos(latR) - math.Cos(decR)*math.Sin(latR)*math.Cos(hourAngle)
+	az := radToDeg(math.Atan2(sinAz, cosAz))
+	return pyMod(az, 360.0)
+}
+
 func degToRad(d float64) float64 { return d * math.Pi / 180.0 }
 func radToDeg(r float64) float64 { return r * 180.0 / math.Pi }
 
@@ -106,6 +119,7 @@ func clamp(v, lo, hi float64) float64 {
 // Info 某时刻、某站点的天文状态快照。
 type Info struct {
 	SunAlt        float64 // 太阳地平高度角（度）
+	SunAzimuth    float64 // 太阳地平方位角（度，自正北顺时针）
 	MoonAlt       float64 // 月亮地平高度角（度）
 	MoonIllum     float64 // 月亮 illumination 比例 [0,1]
 	MoonPhaseName string  // 月相中文名
@@ -125,9 +139,11 @@ func Compute(localDT time.Time, utcOffsetSec int, lat, lon, darkSunAlt float64) 
 	moonRA, moonDec := MoonRADec(jd)
 	_, illum, phaseName := MoonPhase(jd)
 	sunAlt := AltitudeDeg(jd, lat, lon, sunRA, sunDec)
+	sunAz := AzimuthDeg(jd, lat, lon, sunRA, sunDec)
 
 	return Info{
 		SunAlt:        sunAlt,
+		SunAzimuth:    sunAz,
 		MoonAlt:       AltitudeDeg(jd, lat, lon, moonRA, moonDec),
 		MoonIllum:     illum,
 		MoonPhaseName: phaseName,

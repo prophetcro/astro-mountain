@@ -18,6 +18,10 @@ type reportForm struct {
 	start   string
 	end     string
 
+	// mode 运行模式：空或 "meteor" 为流星雨（默认）；"sunrise" 为日出云海模式。
+	mode        string
+	sunriseDate string
+
 	allSites bool
 	picked   []config.Site
 
@@ -53,6 +57,8 @@ func (s *state) newReportForm() reportForm {
 		days:         days,
 		start:        today.Format(dateLayout),
 		end:          today.AddDate(0, 0, 3).Format(dateLayout),
+		mode:         "meteor",
+		sunriseDate:  today.Format(dateLayout),
 		allSites:     true,
 		wantMarkdown: true,
 		wantDouyin:   s.cfg.Output.AutoDouyin,
@@ -132,13 +138,16 @@ func (s *state) askDateRange(f *reportForm) error {
 	u.info("[1] 流星雨极大日 + 往前推 N 天      （对应 --peak / --days）")
 	u.info("[2] 自定义起止日期区间              （对应 --start / --end）")
 	u.info(fmt.Sprintf("[3] 用配置里的默认天数 %d 天（以今天为极大日）", s.defaultDays()))
+	u.info("[4] 日出云海模式：指定日出当天日期  （对应 --mode sunrise / --sunrise-date）")
 	u.info("[b] 返回主菜单")
 
 	def := "1"
-	if !f.usePeak {
+	if f.mode == "sunrise" {
+		def = "4"
+	} else if !f.usePeak {
 		def = "2"
 	}
-	pick, err := u.choice("请选择", []string{"1", "2", "3", "b"}, def, backReturns)
+	pick, err := u.choice("请选择", []string{"1", "2", "3", "4", "b"}, def, backReturns)
 	if err != nil {
 		return err
 	}
@@ -148,11 +157,13 @@ func (s *state) askDateRange(f *reportForm) error {
 		return errBack
 
 	case "3":
+		f.mode = "meteor"
 		f.usePeak = true
 		f.peak = s.now().Format(dateLayout)
 		f.days = s.defaultDays()
 
 	case "1":
+		f.mode = "meteor"
 		f.usePeak = true
 		peak, derr := u.askDate("极大日  YYYY-MM-DD", f.peak)
 		if derr != nil {
@@ -165,6 +176,7 @@ func (s *state) askDateRange(f *reportForm) error {
 		f.peak, f.days = peak, days
 
 	case "2":
+		f.mode = "meteor"
 		f.usePeak = false
 		for {
 			start, derr := u.askDate("起始日期  YYYY-MM-DD", f.start)
@@ -188,6 +200,17 @@ func (s *state) askDateRange(f *reportForm) error {
 			f.start, f.end = start, end
 			break
 		}
+
+	case "4":
+		f.mode = "sunrise"
+		f.usePeak = false
+		// 日出模式强制 Open-Meteo（A 轨，需要气压层剖面），菜单里锁定该源。
+		f.source = core.SourceOpenMeteo
+		sd, derr := u.askDate("日出当天  YYYY-MM-DD", f.sunriseDate)
+		if derr != nil {
+			return derr
+		}
+		f.sunriseDate = sd
 	}
 
 	nights := f.nights()
@@ -219,6 +242,14 @@ func (s *state) defaultDays() int {
 }
 
 func (f reportForm) nights() []string {
+	if f.mode == "sunrise" {
+		sd, err := ValidateDate(f.sunriseDate)
+		if err != nil {
+			return nil
+		}
+		// 观测夜 = 日出当天回拨一天（NightIDOf 口径）。
+		return []string{sd.AddDate(0, 0, -1).Format(dateLayout)}
+	}
 	if f.usePeak {
 		peak, err := ValidateDate(f.peak)
 		if err != nil {
@@ -476,6 +507,10 @@ func (s *state) askAdvanced(f *reportForm) error {
 }
 
 func (f *reportForm) effectiveSource() core.Source {
+	if f.mode == "sunrise" {
+		// 日出模式强制 A 轨，菜单所有数据源展示统一为 Open-Meteo。
+		return core.SourceOpenMeteo
+	}
 	if f.source == "" {
 		return core.DefaultSource
 	}
@@ -601,6 +636,11 @@ func (s *state) confirmSummary(f *reportForm) (string, error) {
 
 	u.blank()
 	u.println(" ── 确认 " + report.Repeat("─", boxWidth-6))
+	modeLabel := "流星雨"
+	if f.mode == "sunrise" {
+		modeLabel = "日出云海（--mode sunrise）"
+	}
+	u.printf("   模式     %s\n", modeLabel)
 	if len(nights) > 0 {
 		u.printf("   观测夜   %s ~ %s   （%d 夜）\n",
 			nights[0], nights[len(nights)-1], len(nights))
@@ -623,10 +663,15 @@ func (s *state) confirmSummary(f *reportForm) (string, error) {
 
 func (s *state) equivalentCommand(f *reportForm) string {
 	parts := []string{"astro-mountain"}
-	if f.usePeak {
-		parts = append(parts, "--peak "+f.peak, fmt.Sprintf("--days %d", f.days))
-	} else {
-		parts = append(parts, "--start "+f.start, "--end "+f.end)
+	switch f.mode {
+	case "sunrise":
+		parts = append(parts, "--mode sunrise", "--sunrise-date "+f.sunriseDate)
+	default:
+		if f.usePeak {
+			parts = append(parts, "--peak "+f.peak, fmt.Sprintf("--days %d", f.days))
+		} else {
+			parts = append(parts, "--start "+f.start, "--end "+f.end)
+		}
 	}
 
 	if src := f.effectiveSource(); !src.IsDefault() {
@@ -676,12 +721,14 @@ func (f reportForm) sites(s *state) []config.Site {
 func (s *state) execute(f *reportForm) error {
 	u := s.u
 
-	if reason := s.tomorrowUnavailableReason(f.effectiveSource()); reason != "" {
-		u.blank()
-		u.fail("无法执行：" + reason)
-		u.info("未生成任何报告——不会用 " + core.DefaultSource.Label() +
-			"（A 轨）替你出一份你没要的报告。")
-		return u.pause()
+	if f.mode != "sunrise" {
+		if reason := s.tomorrowUnavailableReason(f.effectiveSource()); reason != "" {
+			u.blank()
+			u.fail("无法执行：" + reason)
+			u.info("未生成任何报告——不会用 " + core.DefaultSource.Label() +
+				"（A 轨）替你出一份你没要的报告。")
+			return u.pause()
+		}
 	}
 
 	if s.opts.Engine == nil {
@@ -692,6 +739,7 @@ func (s *state) execute(f *reportForm) error {
 
 	sites := f.sites(s)
 	params := core.RunParams{
+		Mode:       f.mode,
 		Source:     f.effectiveSource(),
 		Models:     f.models,
 		Sites:      sites,
@@ -706,10 +754,19 @@ func (s *state) execute(f *reportForm) error {
 		Quiet:      !f.showTable,
 		Verbose:    f.verbose,
 	}
-	if f.usePeak {
-		params.Peak, params.Days = f.peak, f.days
-	} else {
-		params.Start, params.End = f.start, f.end
+	switch f.mode {
+	case "sunrise":
+		// 日出模式必须以 Open-Meteo（A 轨）取气压层剖面反演云海几何，
+		// 无视菜单里可能选过的 tomorrow/meteoblue。
+		params.SunriseDate = f.sunriseDate
+		params.Source = core.SourceOpenMeteo
+		params.Peak, params.Start, params.End = "", "", ""
+	default:
+		if f.usePeak {
+			params.Peak, params.Days = f.peak, f.days
+		} else {
+			params.Start, params.End = f.start, f.end
+		}
 	}
 
 	u.blank()

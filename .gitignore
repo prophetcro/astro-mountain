@@ -2,6 +2,7 @@
 dist/
 # 仓库根直接 `go build` 产生的二进制
 /astro-mountain
+/cloudsea-verify
 *.exe *.exe~ *.dll *.so *.dylib
 *.test
 *.out

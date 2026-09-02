@@ -186,6 +186,9 @@ type Site struct {
 	Timezone string  `json:"timezone,omitempty"`
 	Enabled  *bool   `json:"enabled,omitempty"`
 	Note     string  `json:"note,omitempty"`
+	// DriveMinutes 上山车程（分钟），用于日出模式推算「建议抵达机位时间」。
+	// 缺省（0）时按配置 arrive_buffer_min 直接给缓冲，不叠加车程。
+	DriveMinutes int `json:"drive_minutes,omitempty"`
 }
 
 // IsEnabled 站点是否启用：Enabled 为 nil（未显式设置）时视为启用。
@@ -320,4 +323,6 @@ type ReportMeta struct {
 	GeneratedAt         string     `json:"generated_at"`
 	Source              string     `json:"source"`
 	Disclaimer          string     `json:"disclaimer"`
+	// Mode 运行模式：空 / "meteor" 为流星雨（默认），"sunrise" 为日出云海模式。
+	Mode string `json:"mode,omitempty"`
 }

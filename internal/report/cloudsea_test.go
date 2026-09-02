@@ -182,9 +182,10 @@ func TestComputeSiteNightStatsRadFogHeight(t *testing.T) {
 	}
 }
 
-// TestMarkdownDetailTableHasCloudSeaColumn 确保汇总表真的多出一列「日出窗云海」，
-// 且对窗口内存在云海的站点打出「有」，避免云海提示形同虚设。
-func TestMarkdownDetailTableHasCloudSeaColumn(t *testing.T) {
+// TestMarkdownDetailTableNoCloudSeaColumn 锁死：流星雨明细汇总表已从列头移除
+// 「日出窗云海」——该信息改由独立的日出云海模式（--mode sunrise）承载，
+// 避免与星野/流星雨的「通透/风险」主线混在一起。仍校验窗口内有云海的站点数据能正常渲染。
+func TestMarkdownDetailTableNoCloudSeaColumn(t *testing.T) {
 	meta := testMeta()
 	meta.Peak = model.Str("2026-08-12")
 	meta.Sites = []model.Site{
@@ -207,11 +208,12 @@ func TestMarkdownDetailTableHasCloudSeaColumn(t *testing.T) {
 	}
 	text := BuildMarkdownReport(rows, nil, meta, config.Default())
 
-	if !strings.Contains(text, "| 日出窗云海 |") {
-		t.Fatalf("汇总表缺少「日出窗云海」列头：\n%s", text)
+	if strings.Contains(text, "| 日出窗云海 |") {
+		t.Fatalf("流星雨明细表仍含「日出窗云海」列头，应已移除：\n%s", text)
 	}
-	if !strings.Contains(text, "有") {
-		t.Fatalf("汇总表未出现云海=有：\n%s", text)
+	// 站点名应正常出现在表中，确认渲染未整体崩坏。
+	if !strings.Contains(text, "牵牛岗") || !strings.Contains(text, "太子尖") {
+		t.Fatalf("汇总表未出现站点名，渲染异常：\n%s", text)
 	}
 }
 

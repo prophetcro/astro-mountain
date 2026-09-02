@@ -376,6 +376,50 @@ func TestBuildRunParams_NoDateFallsBackToToday(t *testing.T) {
 	}
 }
 
+// TestValidate_SunriseRequiresDate 锁死：日出模式必须配合 --sunrise-date，
+// 且日出模式与 --peak 不互斥（peak 被忽略），但缺日期必须报错。
+func TestValidate_SunriseRequiresDate(t *testing.T) {
+	// 缺日期 → 报错
+	o := mustParse(t, "--mode", "sunrise")
+	if err := o.Validate(); err == nil {
+		t.Fatal("日出模式缺 --sunrise-date 应报错，实际通过")
+	} else if !strings.Contains(err.Error(), "--sunrise-date") {
+		t.Fatalf("错误应点名 --sunrise-date，实际：%v", err)
+	}
+
+	// 有日期 → 通过（即便同时带了 --peak，sunrise 模式忽略之）
+	o2 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-14", "--peak", "2026-08-12")
+	if err := o2.Validate(); err != nil {
+		t.Fatalf("日出模式（带被忽略的 --peak）应合法，实际：%v", err)
+	}
+
+	// 日期格式错误 → 报错
+	o3 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "08/14/2026")
+	if err := o3.Validate(); err == nil {
+		t.Fatal("非法 --sunrise-date 格式应通过校验失败，实际通过")
+	}
+}
+
+// TestBuildRunParams_SunriseSkipsDefaultDates 锁死：日出模式由 SunriseDate 锚定，
+// BuildRunParams 不应回填 start/end 默认值，也不应触碰 Peak。
+func TestBuildRunParams_SunriseSkipsDefaultDates(t *testing.T) {
+	o := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-14")
+	cfg := config.Default()
+	cfg.Output.DefaultDays = 5
+
+	p := o.BuildRunParams(cfg, nil)
+	if p.Mode != "sunrise" {
+		t.Fatalf("Mode 应为 sunrise，实际 %q", p.Mode)
+	}
+	if p.SunriseDate != "2026-08-14" {
+		t.Fatalf("SunriseDate 应为 2026-08-14，实际 %q", p.SunriseDate)
+	}
+	if p.Peak != "" || p.Start != "" || p.End != "" {
+		t.Fatalf("日出模式不应回填 Peak/Start/End，实际 Peak=%q Start=%q End=%q",
+			p.Peak, p.Start, p.End)
+	}
+}
+
 func TestMainWith_Help(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := MainWith([]string{"--help"}, "v1.2.3", &out, &errOut, true)

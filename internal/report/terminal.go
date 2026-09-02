@@ -254,7 +254,7 @@ func PrintCrossModelSummary(w io.Writer, compare []model.ModelCompareRow, cfg co
 	fmt.Fprintln(w, Repeat("=", TableFixedWidth))
 
 	type siteSum struct {
-		site          string
+		site                  string
 		iconOK, gfsOK, bothOK int
 	}
 	sums := make(map[string]*siteSum, 8)
@@ -565,7 +565,10 @@ func nightAstroLine(night string, sites []model.Site, cfg config.Config, utcOffs
 		st.MoonDesc, st.DarkHours, FormatFixed(st.GCMax, 0))
 }
 
-var pressureLevels = [...]int{1000, 975, 950, 925, 900, 850, 800, 700}
+// pressureLevels 终端报告里用于输出的气压层清单。
+// 必须与 internal/api.PressureLevels / internal/profile.PressureLevels 保持一致，
+// 否则终端报告与 Markdown 报告中的云层剖面会对不上。
+var pressureLevels = [...]int{1000, 975, 950, 925, 900, 875, 850, 825, 800, 750, 700}
 
 func maxPressure() int {
 	m := pressureLevels[0]

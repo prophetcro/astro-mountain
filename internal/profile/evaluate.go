@@ -121,6 +121,27 @@ func EvaluateHour(site model.Site, surface model.Surface, layers []CloudLayer,
 	default:
 		// 头顶有云：按云量分档定严重程度，湿度判出来的层只给风险。
 		baseAGL := model.RoundToInt(keyLayer.BaseMSL - siteAlt)
+
+		// 2026-09 修 #5 致命压制：ClassifySite 先判 OVERHEAD 再判 SEA_BELOW，
+		// 导致"脚下有云海 + 头顶薄云"的典型云海形态被头顶薄云一票否决，
+		// 海报上看一辈子都是"云在头顶"。这里在评级阶段做语义合并——
+		// 脚下同时有云海、且头顶云层薄到不会真的挡住星空时，把关系改写为
+		// REL_SEA_BELOW_IN_CLOUD 并降为⚠️，让云海形态不被薄云顶压死。
+		// 判定"薄云可放过"的物理依据：CloudLayer.Thickness() ≤ CloudSeaAboveDepthM
+		// （典型高云卷云 100–200m、典型薄云 200–400m 都被放过；厚低云 500m+ 仍判🔴）。
+		if top, ok := HighestBeneath(siteAlt, layers); ok &&
+			keyLayer.Thickness() <= t.CloudSeaAboveDepthM {
+			relation = REL_SEA_BELOW_IN_CLOUD
+			rating = RATING_WARN
+			gap := siteAlt - top
+			notes = append(notes,
+				"云海在脚下（机位在云中）：云顶低于机位 "+
+					model.FormatFixed(gap, 0)+"m，头顶剩薄云约 "+
+					model.FormatFixed(keyLayer.Thickness(), 0)+
+					"m，云海可拍，可守候云隙破云")
+			break
+		}
+
 		var desc string
 		switch {
 		case keyLayer.RHOnly(t):

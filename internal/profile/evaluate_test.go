@@ -812,3 +812,54 @@ func TestEvaluateHourRadiationFogButCloudyStillBad(t *testing.T) {
 			RATING_BAD, ev.Rating, ev.Note)
 	}
 }
+
+// 2026-09 修 #5 致命压制：ClassifySite 先判 OVERHEAD 再判 SEA_BELOW，
+// 导致「脚下有云海 + 头顶薄云」这种典型云海形态被判成 REL_OVERHEAD 而压死。
+// 修复后 EvaluateHour 应识别脚下云海 + 头顶薄云，把它改写成 REL_SEA_BELOW_IN_CLOUD。
+func TestEvaluateHourOverheadThinCloudRewritesToSeaBelowInCloud(t *testing.T) {
+	layers := []CloudLayer{
+		// 脚下云海：云顶 1200m，远低于机位 1442m。
+		{BaseMSL: 100, TopMSL: 1200, MaxCC: 90},
+		// 头顶薄云：云底 1500m，厚度 200m ≤ CloudSeaAboveDepthM (500m)，应当被放过。
+		{BaseMSL: 1500, TopMSL: 1700, MaxCC: 70},
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, clearInCloudSurface())
+
+	if ev.Relation != REL_SEA_BELOW_IN_CLOUD {
+		t.Fatalf("脚下云海+头顶薄云应为 %q，实际 %q（说明 %q）",
+			REL_SEA_BELOW_IN_CLOUD, ev.Relation, ev.Note)
+	}
+	if ev.Rating != RATING_WARN {
+		t.Fatalf("典型云海形态应为 %q，实际 %q（说明：%s）",
+			RATING_WARN, ev.Rating, ev.Note)
+	}
+	if !strings.Contains(ev.Note, "云海在脚下（机位在云中）") {
+		t.Fatalf("说明应点名「云海在脚下（机位在云中）」，实际：%s", ev.Note)
+	}
+}
+
+// 2026-09 反向验证：头顶是厚低云（≥500m）时**不能**被改写为 SEA_BELOW_IN_CLOUD，
+// 否则就把「真正被厚云盖顶」的坏天气放过去了——这是修 #5 的边界条件。
+func TestEvaluateHourOverheadThickCloudDoesNotRewrite(t *testing.T) {
+	layers := []CloudLayer{
+		// 脚下有云海（不应改变 OVERHEAD 判定的本质：头顶厚云才是问题）。
+		{BaseMSL: 100, TopMSL: 1200, MaxCC: 90},
+		// 头顶厚低云：900m 厚，远超 CloudSeaAboveDepthM (500m)，不能被放过。
+		{BaseMSL: 1500, TopMSL: 2400, MaxCC: 90},
+	}
+	ev := evalWithLayers(t, niucaoSite(), layers, clearInCloudSurface())
+
+	// 应当维持 OVERHEAD 形态（不是 SEA_BELOW_IN_CLOUD）；
+	// 评级至少是 WARN：薄高云不会触发 RHOnly，MaxCC=90 触发 RATING_BAD。
+	if ev.Relation == REL_SEA_BELOW_IN_CLOUD {
+		t.Fatalf("头顶厚低云被错改成 %q（说明 %q），改写条件过于宽松",
+			REL_SEA_BELOW_IN_CLOUD, ev.Note)
+	}
+	if ev.Rating == RATING_OK {
+		t.Fatalf("头顶厚低云（900m 厚 + 90%% 云量）却被判为 OK，说明：%s", ev.Note)
+	}
+	if !strings.Contains(ev.Note, "成片遮挡") && ev.Rating != RATING_BAD {
+		// 厚低云应触发 BAD；退化到 WARN 是不允许的「改写条件太宽松」信号。
+		t.Fatalf("厚低云场景应给「成片遮挡」+BAD，实际评级 %q：%s", ev.Rating, ev.Note)
+	}
+}

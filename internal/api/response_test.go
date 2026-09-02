@@ -150,10 +150,19 @@ func TestParseResponse_LevelValues(t *testing.T) {
 	if len(levels) != len(PressureLevels) {
 		t.Fatalf("LevelValues 返回 %d 层，期望 %d 层", len(levels), len(PressureLevels))
 	}
-	for _, p := range PressureLevels {
+	// fixture 是 8 层模式的存量抓取（1000/975/950/925/900/850/800/700），
+	// 11 层模式新增的 875/825/750 在 fixture 里本就不存在，断言这些层「有数据」无意义。
+	// 真实数据来源 API，集成测试在 cmd/astro-mountain 的端到端流程里覆盖。
+	legacyLayers := []int{1000, 975, 950, 925, 900, 850, 800, 700}
+	for _, p := range legacyLayers {
 		lv := levels[p]
 		if !lv.CC.Valid || !lv.GH.Valid || !lv.RH.Valid {
 			t.Errorf("%dhPa 层有缺测：cc=%v gh=%v rh=%v", p, lv.CC, lv.GH, lv.RH)
+		}
+	}
+	for _, p := range []int{875, 825, 750} {
+		if _, ok := levels[p]; !ok {
+			t.Errorf("%dhPa 层未出现在 LevelValues 返回中（应至少以缺测值存在）", p)
 		}
 	}
 

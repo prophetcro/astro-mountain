@@ -6,6 +6,7 @@ import (
 	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/dualtrack"
 	"github.com/prophetcro/astro-mountain/internal/model"
+	"github.com/prophetcro/astro-mountain/internal/report"
 )
 
 // core 以类型别名（=）把 model 的核心数据模型再导出，
@@ -75,6 +76,13 @@ type RunParams struct {
 	Start string // 起始日，YYYY-MM-DD，与 End 搭配
 	End   string // 结束日，YYYY-MM-DD；作为夜的边界是开区间
 
+	// Mode 运行模式：空或 "meteor" 为流星雨（默认）；"sunrise" 为日出云海模式。
+	// 日出模式下用 SunriseDate 指定日出当天日期，覆盖 Peak/Start/End 的语义。
+	Mode string
+	// SunriseDate 日出模式：所选日出当天日期 YYYY-MM-DD（如 2026-12-14）。
+	// 分析的是其前一夜（含该日日出时分）。
+	SunriseDate string
+
 	Source    Source // 数据源：A 轨 Open-Meteo 或 B 轨 Tomorrow.io
 	Models    string // 显式指定的预报模式；为空时按站点 Region 自动解析
 	Compare   bool   // 强制开启双模型交叉对比（与 config.api.cross_model 取或）
@@ -114,6 +122,10 @@ type ExecResult struct {
 	CSVPath    string
 	JSONPath   string
 	ImagePaths []string
+
+	// Sunrise 是「日出云海模式」下各站点的聚合结果；流星雨模式为空。
+	// 与 Rows 互斥：日出模式不走逐小时 HourRow 管线，单独渲染日出报告。
+	Sunrise []report.SunriseSiteResult
 
 	Warnings []string
 	Errors   []string
