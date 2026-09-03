@@ -72,7 +72,7 @@ type WindowConfig struct {
 	SunriseWindowAfterMin  int `json:"sunrise_window_after_min"`
 
 	// ArriveBufferMin 日出模式下「建议抵达机位时间」相对日出的总提前量（分钟）。
-	// 实际提前量 = ArriveBufferMin + 站点 DriveMinutes（车程）。默认 90。
+	// 抵达时间 = 日出 − ArriveBufferMin。默认 90。
 	ArriveBufferMin int `json:"arrive_buffer_min"`
 }
 
@@ -89,6 +89,27 @@ type Thresholds struct {
 	FogCalmWindMS   float64 `json:"fog_calm_wind_ms"`
 	FogProxyRHHigh  float64 `json:"fog_proxy_rh_high"`
 	FogProxyRHWarn  float64 `json:"fog_proxy_rh_warn"`
+
+	// 以下六项是「近地体积雾（辐射雾）」正面提示专用阈值，与上面观星否决项的
+	// RH 阈值相互独立（用途不同：一个是否决干扰，一个是提示题材），不要合并。
+	//
+	// FogProxyRHStrong / FogProxyRHModerate：能见度缺测时的代理判据湿度门槛。
+	// FogProxySpreadStrongC / FogProxySpreadModerateC：代理判据的温露差门槛（℃），
+	//   与湿度门槛搭配使用——温露差反映「离饱和多远」，RH 反映「已经多湿」。
+	FogProxyRHStrong        float64 `json:"fog_proxy_rh_strong"`
+	FogProxyRHModerate      float64 `json:"fog_proxy_rh_moderate"`
+	FogProxySpreadStrongC   float64 `json:"fog_proxy_spread_strong_c"`
+	FogProxySpreadModerateC float64 `json:"fog_proxy_spread_moderate_c"`
+
+	// FogWindOptimalMinMS / FogWindOptimalMaxMS：辐射雾最有利的风速区间（m/s）。
+	//   过静（低于下限）常常只结露不成雾，故只作说明不上下调档位。
+	// FogWindDisruptMS：超过该风速，湍流破坏逆温层，雾易被吹散，档位下调。
+	FogWindOptimalMinMS float64 `json:"fog_wind_optimal_min_ms"`
+	FogWindOptimalMaxMS float64 `json:"fog_wind_optimal_max_ms"`
+	FogWindDisruptMS    float64 `json:"fog_wind_disrupt_ms"`
+
+	// FogClearSkyLowCC：低云量低于该值即视为晴空，利于夜间辐射降温 → 雾档加成。
+	FogClearSkyLowCC float64 `json:"fog_clear_sky_low_cc"`
 
 	OverheadSevereCC        float64 `json:"overhead_severe_cc"`
 	LayerMinHalfSpanFrac    float64 `json:"layer_min_half_span_frac"`

@@ -36,8 +36,8 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 		sunrise = time.Date(sunriseDate.Year(), sunriseDate.Month(), sunriseDate.Day(), 6, 30, 0, 0, loc)
 	}
 	res.SunriseTime = sunrise
-	// 建议抵达机位时间 = 日出 − (缓冲 + 上山车程)；车程 0 时即纯缓冲。
-	res.ArriveBy = sunrise.Add(-time.Duration(arriveBufferMin+site.DriveMinutes) * time.Minute)
+	// 建议抵达机位时间 = 日出 − 缓冲（arrive_buffer_min）。
+	res.ArriveBy = sunrise.Add(-time.Duration(arriveBufferMin) * time.Minute)
 
 	// 云海时段：复用 Phase 1 的 CollectCloudSeaEpisodesForNight（独立重算，不改 HourRow）。
 	eps := CollectCloudSeaEpisodesForNight(site, resp, targetNight, cfg)
@@ -51,6 +51,13 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	// 朝霞：取离日出时刻最近的整点云量评估（±40min 内），缺测则兜底全夜最大中高云量。
 	glowLow, glowMid, glowHigh := dawnGlowCloud(resp, sunrise)
 	res.DawnGlow, res.DawnGlowNote = assessDawnGlow(glowLow, glowMid, glowHigh)
+
+	// 近地体积雾：日出拍摄窗口内逐时判定，取最强的一档。
+	// 这是独立于云海判定的正面信号——近地雾是贴地现象，与「脚下有没有云海」
+	// 由两套完全不同的判据给出（云海看气压层廓线几何，近地雾看地面要素），
+	// 两者互不覆盖，也不参与云海可信度与朝霞档位的计算。
+	fog := assessDawnGroundFog(resp, sunrise, cfg)
+	res.FogPotential, res.FogNote = fog.Level, fog.Note
 
 	// 可信度：云海时次 + 时段数 + 模式垂直分辨率（机位上下相邻层间距）。
 	// 只要有一段是「淹没型」（机位埋在云层顶部附近），可信度封顶「中」——
@@ -70,12 +77,29 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	return res
 }
 
+// wallClockUTC 把任意时区的时刻剥去时区、只保留墙钟（年月日时分秒），统一用 UTC 承载。
+//
+// 为什么必须剥时区：astro.SunriseTime 返回的是 FixedZone("local", utcOffsetSec) 下的
+// **当地墙钟**（如 06:03 +0800，其绝对瞬间是前一日 22:03Z）；
+// 而 api.Response.Times 是「把 UTC 偏移加进去之后用 UTC 承载的当地墙钟」（06:03 记作 06:03Z）。
+// 两者直接相减会比真实墙钟差整整一个时区偏移（本项目 UTC+8，即 +8h），
+// 于是「距日出 3 分钟的 06:00」会被算成「距日出 8 小时」，
+// 而昨夜 23:00 反倒成了「最近时次」——朝霞取云量、近地雾取窗口都会因此取错小时。
+// 与 report.sunriseWindowContains 同一口径：比较前先剥时区，只比墙钟。
+func wallClockUTC(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.UTC)
+}
+
 // dawnGlowCloud 在日出时刻附近找一行，返回其低/中/高云量（缺测回退到全夜最大中高云量）。
+//
+// 「附近」按**墙钟**比较（见 wallClockUTC）：不剥时区时，日出后 3 分钟的时次会被算成
+// 8 小时之外，选中的反而是前一夜 23:00，朝霞档位因此用了完全不相干的云量。
 func dawnGlowCloud(resp *api.Response, sunrise time.Time) (low, mid, high float64) {
+	sunriseWall := wallClockUTC(sunrise)
 	bestIdx := -1
 	var bestDelta int64 = 1 << 62
 	for idx, localDT := range resp.Times {
-		d := absMinutes(localDT.Sub(sunrise))
+		d := absMinutes(wallClockUTC(localDT).Sub(sunriseWall))
 		if d < bestDelta {
 			bestDelta = d
 			bestIdx = idx
@@ -138,6 +162,85 @@ func assessDawnGlow(low, mid, high float64) (string, string) {
 	default:
 		return "无", "无中高云载体，晴天无朝霞（或全低云压顶）"
 	}
+}
+
+// assessDawnGroundFog 聚合「日出拍摄窗口」内的近地体积雾档位，取最强的一档。
+//
+// 窗口 = [日出 − SunriseWindowBeforeMin, 日出 + SunriseWindowAfterMin]（默认 −45~+30min），
+// 与朝霞取值的口径一致：用户真正在现场按快门的就是这一段时间。
+// 雾是逐时演变的（日出前最重、日出后抬升消散），故取窗口内**最强**档而非平均——
+// 平均会把「前半小时有雾、后半小时散了」稀释成「无雾」，那正是用户想避免的漏报。
+//
+// 窗口内没有任何时次时（模式分辨率粗于窗口宽度，如 3h 数据），
+// 退回离日出最近的那个时次，并在 Note 里注明，不假装窗口内真有数据。
+// 时间轴为空则返回「无」+ 说明，绝不编造。
+//
+// 判定本身一律由 profile.AssessGroundFog 给出（能见度权威、缺测降级到近地 RH 代理），
+// 此处只负责挑时次，不复制任何判据——避免与逐小时评级出现口径分叉。
+func assessDawnGroundFog(resp *api.Response, sunrise time.Time, cfg config.Config) profile.FogAssessment {
+	if resp == nil || len(resp.Times) == 0 {
+		return profile.FogAssessment{
+			Level: profile.FOG_NONE,
+			Note:  "预报时间轴为空，无法判定近地雾",
+		}
+	}
+
+	before := cfg.Window.SunriseWindowBeforeMin
+	if before < 0 {
+		before = 0
+	}
+	after := cfg.Window.SunriseWindowAfterMin
+	if after < 0 {
+		after = 0
+	}
+	winBefore := time.Duration(before) * time.Minute
+	winAfter := time.Duration(after) * time.Minute
+
+	// 日出时刻与响应时间轴的时区承载方式不同（前者 FixedZone 墙钟、后者 UTC 承载墙钟），
+	// 比较前统一剥时区，否则整个窗口会整体平移一个时区偏移、命中昨夜的时次。
+	sunriseWall := wallClockUTC(sunrise)
+
+	best := profile.FogAssessment{Level: profile.FOG_NONE}
+	bestRank := -1
+	bestAbs := int64(1 << 62)
+	found := false
+
+	for idx, localDT := range resp.Times {
+		// delta > 0 表示该时次晚于日出；窗口为 [−before, +after]。
+		delta := wallClockUTC(localDT).Sub(sunriseWall)
+		if delta > winAfter || delta < -winBefore {
+			continue
+		}
+		a := profile.AssessGroundFog(resp.Surface(idx), cfg.Thresh)
+		absM := absMinutes(delta)
+		// 同档位时取更靠近日出的那一时次：它离拍摄时刻最近，也最可信。
+		if r := profile.FogLevelRank(a.Level); r > bestRank || (r == bestRank && absM < bestAbs) {
+			best, bestRank, bestAbs = a, r, absM
+		}
+		found = true
+	}
+
+	if found {
+		return best
+	}
+
+	// 窗口内没有时次：退回最近时次并如实标注。
+	nearestIdx, nearestAbs := -1, int64(1<<62)
+	for idx, localDT := range resp.Times {
+		if d := absMinutes(wallClockUTC(localDT).Sub(sunriseWall)); d < nearestAbs {
+			nearestAbs, nearestIdx = d, idx
+		}
+	}
+	if nearestIdx < 0 {
+		return profile.FogAssessment{Level: profile.FOG_NONE, Note: "预报时间轴为空，无法判定近地雾"}
+	}
+	fallback := profile.AssessGroundFog(resp.Surface(nearestIdx), cfg.Thresh)
+	if fallback.Note != "" {
+		fallback.Note += "；"
+	}
+	fallback.Note += fmt.Sprintf("日出拍摄窗口（−%d~+%dmin）内无模式时次，改用距日出 %d 分钟的最近时次",
+		before, after, nearestAbs)
+	return fallback
 }
 
 // nightVerticalGap 取该夜首个可用廓线的机位上下相邻层间距，反映模式垂直分辨率。

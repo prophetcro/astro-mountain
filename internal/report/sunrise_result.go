@@ -56,6 +56,16 @@ type SunriseSiteResult struct {
 	DawnGlow     string // 朝霞四档：无 / 小烧 / 中烧 / 大烧
 	DawnGlowNote string
 
+	// FogPotential 近地体积雾（辐射雾）可能档位：强 / 中 / 弱 / 无。
+	// 取值来自 profile.FOG_*，是**正面信号**——对云海/朝霞摄影来说贴地雾本身
+	// 就是拍摄主体（不是观星模式里那个「起雾=不宜」的否决项），
+	// 因此在「无云海 + 大烧朝霞」时也要如实给出，让用户知道现场有没有地面雾可拍。
+	// 「无」由渲染层跳过该行（与 CloudSeaForm 空值跳过的处理一致）。
+	FogPotential string
+	// FogNote 近地雾判定的理由：证据串（地面RH / 温露差 / 风速 / 能见度）
+	// + 辐射雾的加成或抑制说明；能见度缺测时明写「按近地 RH 代理判定」。
+	FogNote string
+
 	Confidence     string // 云海可信度（五档）：极高 / 高 / 中 / 低 / 极低
 	ConfidenceNote string
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/model"
+	"github.com/prophetcro/astro-mountain/internal/profile"
 )
 
 // sunriseResultDate 取某条日出结果所属的「日出当天」key（用于多日分组）。
@@ -196,13 +197,14 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 					fmt.Sprintf("%d", r.CloudSeaHours),
 					orDash(r.CloudSeaForm),
 					r.DawnGlow,
+					orDash(fogPotentialCell(r.FogPotential)),
 					r.Confidence,
 					r.ArriveBy.Format("15:04"),
 					r.Rating,
 				})
 			}
 			lines = append(lines,
-				MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "云海可信度", "建议抵达", "结论"}, sumRows)...)
+				MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "近地雾", "云海可信度", "建议抵达", "结论"}, sumRows)...)
 			lines = append(lines, "")
 			if best := bestSunriseSite(byDate[d]); best != "" {
 				lines = append(lines, fmt.Sprintf("**综合推荐（该日出）**：%s（云海时长与可信度综合最优）", best))
@@ -217,13 +219,14 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 				fmt.Sprintf("%d", r.CloudSeaHours),
 				orDash(r.CloudSeaForm),
 				r.DawnGlow,
+				orDash(fogPotentialCell(r.FogPotential)),
 				r.Confidence,
 				r.ArriveBy.Format("15:04"),
 				r.Rating,
 			})
 		}
 		lines = append(lines,
-			MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "云海可信度", "建议抵达", "结论"}, sumRows)...)
+			MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "近地雾", "云海可信度", "建议抵达", "结论"}, sumRows)...)
 		lines = append(lines, "")
 		if best := bestSunriseSite(results); best != "" {
 			lines = append(lines, fmt.Sprintf("**综合推荐**：%s（云海时长与可信度综合最优）", best))
@@ -280,11 +283,33 @@ func sunriseSiteDayBody(r SunriseSiteResult) []string {
 		out = append(out, fmt.Sprintf("**云海形态**：%s", r.CloudSeaForm), "")
 	}
 	out = append(out,
-		fmt.Sprintf("**朝霞强度**：%s — %s", r.DawnGlow, r.DawnGlowNote), "",
+		fmt.Sprintf("**朝霞强度**：%s — %s", r.DawnGlow, r.DawnGlowNote), "")
+	// 近地雾是正面信号：即便「无云海 + 大烧朝霞」，现场也可能有可拍的贴地雾。
+	// 档位为「无」或空值时整行跳过，与 CloudSeaForm 空值跳过的处理一致。
+	if fogPotentialShown(r.FogPotential) {
+		out = append(out, fmt.Sprintf("**近地雾可能**：%s — %s", r.FogPotential, r.FogNote), "")
+	}
+	out = append(out,
 		fmt.Sprintf("**云海可信度**：%s — %s", r.Confidence, r.ConfidenceNote), "",
 		fmt.Sprintf("**一句话结论**：%s", r.Rating), "",
 	)
 	return out
+}
+
+// fogPotentialShown 判断近地雾是否需要渲染：未判定（空）或「无」时跳过该行。
+//
+// 「无」不是失败，而是「近地未达成雾条件」——对摄影没有信息量，故不占版面；
+// 这与云海形态（CloudSeaForm 为空即跳过）的处理方式保持一致。
+func fogPotentialShown(level string) bool {
+	return level != "" && level != profile.FOG_NONE
+}
+
+// fogPotentialCell 渲染汇总表里的近地雾单元格：不展示时返回空串，由 orDash 补「-」。
+func fogPotentialCell(level string) string {
+	if !fogPotentialShown(level) {
+		return ""
+	}
+	return level
 }
 
 // PrintSunriseReport 在终端紧凑打印日出模式结果。
@@ -361,6 +386,10 @@ func printSunriseSiteDay(w io.Writer, r SunriseSiteResult) {
 		fmt.Fprintf(w, "  云海形态：%s\n", r.CloudSeaForm)
 	}
 	fmt.Fprintf(w, "  朝霞：%s\n", r.DawnGlow)
+	// 近地雾与朝霞并列展示：无云海时它可能是唯一可拍的题材。档位「无」不打印。
+	if fogPotentialShown(r.FogPotential) {
+		fmt.Fprintf(w, "  近地雾：%s\n", r.FogPotential)
+	}
 	fmt.Fprintf(w, "  云海可信度：%s\n", r.Confidence)
 	fmt.Fprintf(w, "  结论：%s\n", r.Rating)
 }
@@ -389,6 +418,9 @@ func printSunriseSiteBlock(w io.Writer, results []SunriseSiteResult) {
 			fmt.Fprintf(w, "  云海形态：%s\n", r.CloudSeaForm)
 		}
 		fmt.Fprintf(w, "  朝霞：%s\n", r.DawnGlow)
+		if fogPotentialShown(r.FogPotential) {
+			fmt.Fprintf(w, "  近地雾：%s\n", r.FogPotential)
+		}
 		fmt.Fprintf(w, "  云海可信度：%s\n", r.Confidence)
 		fmt.Fprintf(w, "  结论：%s\n", r.Rating)
 	}
