@@ -420,6 +420,10 @@ func (s *state) askExportOptions(f *reportForm) error {
 		"（开启对应 --csv）",
 		"（开启对应 --json）",
 	}
+	if f.mode == "sunrise" {
+		// 抖音竖图按流星雨报告的章节名匹配，日出报告章节不同，选了也出不来。
+		hints[1] = "（日出模式暂不支持，会被自动关闭）"
+	}
 	selected := []bool{f.wantMarkdown, f.wantDouyin, f.wantCSV, f.wantJSON}
 
 	if err := u.multiSelect(labels, hints, selected, true, "请至少选择一种导出内容"); err != nil {
@@ -427,6 +431,11 @@ func (s *state) askExportOptions(f *reportForm) error {
 	}
 	f.wantMarkdown, f.wantDouyin, f.wantCSV, f.wantJSON =
 		selected[0], selected[1], selected[2], selected[3]
+	if f.mode == "sunrise" && f.wantDouyin {
+		u.warn("日出模式暂不支持抖音竖图：竖图渲染按流星雨报告的章节名匹配，已自动关闭")
+		f.wantDouyin = false
+		selected[1] = false
+	}
 
 	if f.wantDouyin && !f.wantMarkdown {
 		u.warn("抖音图依赖 Markdown 报告的正文，已自动同时开启 Markdown 报告")

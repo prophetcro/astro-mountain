@@ -710,6 +710,19 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		return res
 	}
 
+	// 日出模式不产出逐小时明细，也走不通抖音竖图（竖图按流星雨报告的章节名匹配）。
+	// 这两项被要点名跳过时如实告知，绝不能默默吞掉用户的 --csv/--json/--douyin。
+	if p.ExportCSV || p.ExportJSON || e.Cfg.Output.ExportCSV || e.Cfg.Output.ExportJSON {
+		res.Warnings = append(res.Warnings,
+			"日出模式不导出逐小时 CSV/JSON 明细（该明细是流星雨模式的逐夜逐时评级），"+
+				"本次仅产出 Markdown 报告")
+	}
+	if p.Douyin {
+		res.Warnings = append(res.Warnings,
+			"日出模式暂不支持抖音竖图：竖图渲染按流星雨报告的章节名匹配，"+
+				"日出报告章节不同，已跳过出图（Markdown 报告不受影响）")
+	}
+
 	// 放宽夜窗到含日出（NightEndHour→8），用配置副本，不改全局默认。
 	cfg := e.Cfg
 	if cfg.Window.NightEndHour < 8 {
@@ -787,18 +800,18 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 	}
 
 	meta := ReportMeta{
-		Mode:               "sunrise",
-		Models:             models,
-		Start:              p.SunriseDate,
-		End:                p.SunriseDate,
-		Nights:             nights,
-		NightsDesc:         nightsDesc,
-		Timezone:           e.Cfg.API.Timezone,
-		UTCOffsetHours:     repOffsetHours,
-		Sites:              sites,
-		GeneratedAt:        e.now().Format("2006-01-02 15:04:05"),
-		Source:             report.MetaSourceOpenMeteo,
-		Disclaimer:         "云海几何由气压层剖面反演；天文量为纯 Go 近似算法结果，均非观测实测值。",
+		Mode:           "sunrise",
+		Models:         models,
+		Start:          p.SunriseDate,
+		End:            p.SunriseDate,
+		Nights:         nights,
+		NightsDesc:     nightsDesc,
+		Timezone:       e.Cfg.API.Timezone,
+		UTCOffsetHours: repOffsetHours,
+		Sites:          sites,
+		GeneratedAt:    e.now().Format("2006-01-02 15:04:05"),
+		Source:         report.MetaSourceOpenMeteo,
+		Disclaimer:     "云海几何由气压层剖面反演；天文量为纯 Go 近似算法结果，均非观测实测值。",
 	}
 	if meta.Timezone == "" {
 		meta.Timezone = "Asia/Shanghai"

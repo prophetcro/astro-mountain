@@ -39,7 +39,7 @@ type Options struct {
 	End   string
 
 	// Mode 运行模式：空或 "meteor" 为流星雨（默认）；"sunrise" 为日出云海模式。
-	Mode  string
+	Mode string
 	// SunriseDate 日出模式：所选日出当天日期 YYYY-MM-DD。
 	SunriseDate string
 
@@ -49,7 +49,7 @@ type Options struct {
 	ConfigPath string
 	NoCache    bool
 
-	Compare     bool // 强制开启双模型交叉对比（覆盖配置默认）
+	Compare      bool // 强制开启双模型交叉对比（覆盖配置默认）
 	NoCrossModel bool // 强制关闭双模型交叉对比（覆盖配置默认）
 
 	OutDir     string
@@ -284,22 +284,27 @@ func (o *Options) BuildRunParams(cfg config.Config, stdout io.Writer) core.RunPa
 		Mode:        o.Mode,
 		SunriseDate: o.SunriseDate,
 		Source:      o.ResolveSource(),
-		Models:     o.Models,
-		Compare:    o.Compare,
-		NoCompare:  o.NoCrossModel,
-		SitesPath:  o.SitesPath,
-		NoCache:    o.NoCache,
-		OutDir:     o.OutDir,
-		ExportCSV:  o.ExportCSV,
-		ExportJSON: o.ExportJSON,
-		NoReport:   o.NoReport,
-		Douyin:     o.ResolveDouyin(cfg),
-		Stdout:     stdout,
-		Quiet:      o.Quiet,
-		Verbose:    o.Verbose,
+		Models:      o.Models,
+		Compare:     o.Compare,
+		NoCompare:   o.NoCrossModel,
+		SitesPath:   o.SitesPath,
+		NoCache:     o.NoCache,
+		OutDir:      o.OutDir,
+		ExportCSV:   o.ExportCSV,
+		ExportJSON:  o.ExportJSON,
+		NoReport:    o.NoReport,
+		Douyin:      o.ResolveDouyin(cfg),
+		Stdout:      stdout,
+		Quiet:       o.Quiet,
+		Verbose:     o.Verbose,
 	}
 	if p.Mode == "sunrise" {
 		// 日出模式由 SunriseDate 锚定，不需要也不能回填 start/end 默认值。
+		//
+		// 抖音竖图按流星雨报告的章节名匹配，日出报告章节不同、渲染不出图。
+		// 这里只认用户显式给的 --douyin，不继承配置里的 auto_douyin，
+		// 免得每次日出运行都弹一条「不支持出图」的警告刷屏。
+		p.Douyin = o.Douyin
 		return p
 	}
 	if p.Peak == "" && p.Start == "" && p.End == "" {

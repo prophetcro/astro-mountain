@@ -13,7 +13,18 @@ const helpTemplate = `astro-mountain %s — 山地星空 / 流星雨低云海拔
 不带任何业务选项且在终端中运行时，进入交互菜单；在管道 / CI 等非终端环境中，
 则直接执行默认任务（自今夜起 output.default_days 个观测夜）。
 
-时间范围（--peak 与 --start/--end 二选一，不可混用）：
+运行模式：
+  --mode   NAME         meteor|sunrise，默认 meteor
+                        meteor   流星雨模式：逐夜逐时评级，看头顶通透与辐射点高度
+                        sunrise  日出云海模式：只看一个清晨，输出云海出现/消散时间、
+                                 云海距机位高度、朝霞强度（无/小烧/中烧/大烧）、
+                                 建议抵达机位时间；不产出逐小时 CSV/JSON，
+                                 也不支持抖音竖图（竖图按流星雨报告章节名匹配）
+  --sunrise-date YYYY-MM-DD
+                        配合 --mode sunrise：日出当天日期（不是前一夜）。
+                        工具自动取该日【前一夜】的预报并覆盖到日出之后
+
+时间范围（流星雨模式，--peak 与 --start/--end 二选一，不可混用）：
   --peak   YYYY-MM-DD   流星雨极大日
   --days   N            配合 --peak：在极大日基础上额外向前包含 N 天（N ≥ 1）
                         未指定时取配置 output.default_days
@@ -75,6 +86,9 @@ const helpTemplate = `astro-mountain %s — 山地星空 / 流星雨低云海拔
 
   # 6. 开阔平原点位，改用 Tomorrow.io 的云底数据
   astro-mountain --peak 2026-08-12 --source tomorrow
+
+  # 7. 日出云海模式：看 8 月 14 日清晨的云海与朝霞（自动取 8/13 夜的预报）
+  astro-mountain --mode sunrise --sunrise-date 2026-08-14
 `
 
 func HelpText(version string) string {
