@@ -190,7 +190,11 @@ build_target() {
   echo "    生成: $out_bin"
 
   # 附带 configs/ 与 README.md
+  # 注意：configs/config.json 含真实 API 密钥且已被 gitignore，绝不能打进发布包——
+  # 二进制内置默认由 config.example.json 生成（无密钥），缺失 config.json 时自动回退，
+  # 故发布包只带 config.example.json + sites.json。下面显式删除密钥文件，双保险。
   cp -R configs "$out_dir/configs"
+  rm -f "$out_dir/configs/config.json"
   if [[ -f "README.md" ]]; then
     cp README.md "$out_dir/README.md"
     echo "    附带: README.md"
@@ -261,6 +265,12 @@ verify_archive() {
   # 顺手拦截 macOS 伴生垃圾
   if printf '%s\n' "$listing" | grep -qE '(^|/)(\._|\.DS_Store)'; then
     echo "    [错误] $(basename "$archive") 混入了 .DS_Store / ._ 伴生文件" >&2
+    missing=1
+  fi
+  # 安全闸门：发布包严禁含 configs/config.json（含真实 API 密钥，已被 gitignore）。
+  # 一旦误打包，立刻让构建失败，杜绝密钥随 Release 外泄。
+  if printf '%s\n' "$listing" | grep -qxF "${dir_name}/configs/config.json"; then
+    echo "    [错误] $(basename "$archive") 混入了 configs/config.json（含 API 密钥，严禁发布）" >&2
     missing=1
   fi
   if [[ "$missing" == "1" ]]; then
