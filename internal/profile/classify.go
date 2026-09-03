@@ -62,13 +62,28 @@ func ClassifySite(siteAlt float64, layers []CloudLayer) (string, *CloudLayer) {
 // HighestBeneath 返回严格低于机位的最高云顶（米，海拔）。
 // 机位下方没有云层时第二个返回值为 false，此时第一个返回值无意义。
 func HighestBeneath(siteAlt float64, layers []CloudLayer) (float64, bool) {
-	best, found := 0.0, false
-	for _, l := range layers {
-		if l.TopMSL < siteAlt {
-			if !found || l.TopMSL > best {
-				best, found = l.TopMSL, true
+	l, ok := HighestBeneathLayer(siteAlt, layers)
+	if !ok {
+		return 0.0, false
+	}
+	return l.TopMSL, true
+}
+
+// HighestBeneathLayer 返回严格低于机位的云顶最高的那一层。
+// 机位下方没有云层时第二个返回值为 false，此时第一个返回值为 nil。
+//
+// 返回的指针指向入参 layers 的元素，调用方不应通过它改写切片内容。
+func HighestBeneathLayer(siteAlt float64, layers []CloudLayer) (*CloudLayer, bool) {
+	best, found := -1, false
+	for i := range layers {
+		if layers[i].TopMSL < siteAlt {
+			if !found || layers[i].TopMSL > layers[best].TopMSL {
+				best, found = i, true
 			}
 		}
 	}
-	return best, found
+	if !found {
+		return nil, false
+	}
+	return &layers[best], true
 }

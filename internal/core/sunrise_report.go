@@ -52,8 +52,18 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	res.DawnGlow, res.DawnGlowNote = assessDawnGlow(glowLow, glowMid, glowHigh)
 
 	// 可信度：云海时次 + 时段数 + 模式垂直分辨率（机位上下相邻层间距）。
+	// 只要有一段是「淹没型」（机位埋在云层顶部附近），可信度封顶「中」——
+	// 人就在云里，能见度与稳定性都差，给「高/极高」是伪精度、会让人白跑。
+	submerged := false
+	for _, e := range eps {
+		if e.Submerged {
+			submerged = true
+			break
+		}
+	}
 	vgap := nightVerticalGap(site, resp, targetNight, cfg)
-	res.Confidence, res.ConfidenceNote = assessSunriseConfidence(res.CloudSeaHours, len(eps), vgap)
+	res.Confidence, res.ConfidenceNote = assessSunriseConfidence(
+		res.CloudSeaHours, len(eps), vgap, submerged)
 
 	res.Rating = sunriseVerdict(res)
 	return res
@@ -145,8 +155,14 @@ func nightVerticalGap(site Site, resp *api.Response, targetNight string, cfg con
 
 // assessSunriseConfidence 给出云海出现的诚实五档可信度（绝不伪造百分比）。
 // 五档：极高 / 高 / 中 / 低 / 极低。依据：云海持续时次、云海段数、模式垂直分辨率。
-// 缺云海即「极低」；垂直分辨率不足（机位上下层间距 >500m）降为「低」。
-func assessSunriseConfidence(cloudSeaHours, episodes int, vgap float64) (string, string) {
+// 缺云海即「极低」；垂直分辨率不足（机位上下层间距 >500m）降为「低」；
+// 只要有一段是淹没型（机位埋在云中）封顶「中」。
+//
+// 三道压制的优先级：分辨率不足 > 淹没型 > 时长分档。
+// 分辨率不足最致命（几何反演本身就不可靠），其次是人就在云里拍不到。
+func assessSunriseConfidence(cloudSeaHours, episodes int, vgap float64,
+	submerged bool) (string, string) {
+
 	if cloudSeaHours == 0 {
 		return "极低", "预报窗口内未检出云海（机位下方无连续云面）"
 	}
@@ -156,6 +172,13 @@ func assessSunriseConfidence(cloudSeaHours, episodes int, vgap float64) (string,
 	if badRes {
 		return "低", fmt.Sprintf("云海检出 %d 时次，但模式垂直分辨率不足（机位上下层间距 %.0fm），"+
 			"反演的云海几何不可靠，判定置信度有限", cloudSeaHours, vgap)
+	}
+	// 淹没型封顶「中」：机位本身埋在云层顶部附近，脚下虽有云海，
+	// 但人在云中、能见度差，只能守候云隙破云，稳定性远不如脚下型。
+	if submerged {
+		return "中", fmt.Sprintf("云海检出 %d 时次、%d 段，但机位被云顶淹没"+
+			"（人处在云中，可守候云隙破云，能见度与稳定性都差），可信度封顶「中」",
+			cloudSeaHours, episodes)
 	}
 	switch {
 	case cloudSeaHours >= 8 && episodes >= 1:

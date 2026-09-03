@@ -85,7 +85,6 @@ func EvaluateHour(site model.Site, surface model.Surface, layers []CloudLayer,
 
 	case REL_IN_CLOUD:
 		aboveTop := keyLayer.TopMSL - siteAlt
-		belowBase := siteAlt - keyLayer.BaseMSL
 
 		// 高山云海形态：机位嵌在云层顶部附近、脚下是厚厚的云海。
 		// 几何上机位确实在云里（云顶还在头顶），但主导题材是脚下的云海，
@@ -93,13 +92,17 @@ func EvaluateHour(site model.Site, surface model.Surface, layers []CloudLayer,
 		// 头顶只剩薄云，是出片的好时机。必须「脚下云够厚」且「头顶云够薄」同时满足，
 		// 否则仍是埋在厚云里。命中后改写关系为专属的 REL_SEA_BELOW_IN_CLOUD，
 		// 让报告「主要状态」直接呈现「云海在脚下（机位在云中）」而非笼统的「机位在云中」。
-		if belowBase >= t.CloudSeaBeneathDepthM && aboveTop <= t.CloudSeaAboveDepthM {
+		// 是否构成高山云海形态，交由 ClassifySeaGeometry 统一裁决——
+		// 它与云海时段检测（core.CollectCloudSeaEpisodesForNight）、
+		// 逐小时「云海 有/无」列（core.AnalyseSite）共用同一份几何判定，
+		// 避免同一份廓线被三处判出不同结论。
+		if g := ClassifySeaGeometry(siteAlt, layers, t); g.Present {
 			relation = REL_SEA_BELOW_IN_CLOUD
 			rating = RATING_WARN
 			notes = append(notes,
 				"云海在脚下（机位在云中）：云底在山脚约 "+
-					model.FormatFixed(belowBase, 0)+"m、云顶在头顶约 "+
-					model.FormatFixed(aboveTop, 0)+
+					model.FormatFixed(g.BelowBase, 0)+"m、云顶在头顶约 "+
+					model.FormatFixed(g.AboveTop, 0)+
 					"m，机位处在云层顶部附近，是高山云海典型形态；"+
 					"可守候云隙破云，但稳定性差、山顶大概率有雾凇/湿雾")
 			break
@@ -129,14 +132,13 @@ func EvaluateHour(site model.Site, surface model.Surface, layers []CloudLayer,
 		// REL_SEA_BELOW_IN_CLOUD 并降为⚠️，让云海形态不被薄云顶压死。
 		// 判定"薄云可放过"的物理依据：CloudLayer.Thickness() ≤ CloudSeaAboveDepthM
 		// （典型高云卷云 100–200m、典型薄云 200–400m 都被放过；厚低云 500m+ 仍判🔴）。
-		if top, ok := HighestBeneath(siteAlt, layers); ok &&
-			keyLayer.Thickness() <= t.CloudSeaAboveDepthM {
+		// 与上一个分支同理：脚下云海形态是否成立，由 ClassifySeaGeometry 统一裁决。
+		if g := ClassifySeaGeometry(siteAlt, layers, t); g.Present {
 			relation = REL_SEA_BELOW_IN_CLOUD
 			rating = RATING_WARN
-			gap := siteAlt - top
 			notes = append(notes,
 				"云海在脚下（机位在云中）：云顶低于机位 "+
-					model.FormatFixed(gap, 0)+"m，头顶剩薄云约 "+
+					model.FormatFixed(g.TopAGL, 0)+"m，头顶剩薄云约 "+
 					model.FormatFixed(keyLayer.Thickness(), 0)+
 					"m，云海可拍，可守候云隙破云")
 			break

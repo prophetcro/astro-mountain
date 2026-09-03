@@ -52,25 +52,32 @@ func TestResolveRangeSunriseMissingDate(t *testing.T) {
 // TestAssessSunriseConfidence 锁死诚实五档可信度的边界，绝不输出伪精度百分比。
 func TestAssessSunriseConfidence(t *testing.T) {
 	cases := []struct {
-		name   string
-		hours  int
-		eps    int
-		vgap   float64
-		want   string
+		name      string
+		hours     int
+		eps       int
+		vgap      float64
+		submerged bool
+		want      string
 	}{
-		{"无云海→极低", 0, 0, 100, "极低"},
-		{"8h+1段+分辨率足→极高", 9, 1, 100, "极高"},
-		{"6h+1段+分辨率足→高", 7, 1, 100, "高"},
-		{"3h+1段→中", 4, 1, 100, "中"},
-		{"短时段+分辨率足→中", 2, 1, 100, "中"},
-		{"分辨率不足→低(即便时次多)", 9, 1, 600, "低"},
+		{"无云海→极低", 0, 0, 100, false, "极低"},
+		{"8h+1段+分辨率足→极高", 9, 1, 100, false, "极高"},
+		{"6h+1段+分辨率足→高", 7, 1, 100, false, "高"},
+		{"3h+1段→中", 4, 1, 100, false, "中"},
+		{"短时段+分辨率足→中", 2, 1, 100, false, "中"},
+		{"分辨率不足→低(即便时次多)", 9, 1, 600, false, "低"},
+		// 淹没型封顶「中」：人在云里，再长也不给高/极高。
+		{"淹没型+9h→中(不因时长给极高)", 9, 1, 100, true, "中"},
+		{"淹没型+7h→中(不因时长给高)", 7, 1, 100, true, "中"},
+		{"淹没型+2h→中", 2, 1, 100, true, "中"},
+		// 分辨率不足优先级最高，淹没型也不能把它抬上去。
+		{"淹没型+分辨率不足→低", 9, 1, 600, true, "低"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := assessSunriseConfidence(c.hours, c.eps, c.vgap)
+			got, _ := assessSunriseConfidence(c.hours, c.eps, c.vgap, c.submerged)
 			if got != c.want {
-				t.Fatalf("assessSunriseConfidence(%d,%d,%.0f) = %q，期望 %q",
-					c.hours, c.eps, c.vgap, got, c.want)
+				t.Fatalf("assessSunriseConfidence(%d,%d,%.0f,submerged=%v) = %q，期望 %q",
+					c.hours, c.eps, c.vgap, c.submerged, got, c.want)
 			}
 		})
 	}
@@ -106,12 +113,12 @@ func TestAssessDawnGlow(t *testing.T) {
 // 中→⚠️ 需守候，存疑/无数据→谨慎或放弃。
 func TestSunriseVerdict(t *testing.T) {
 	cases := []struct {
-		name      string
-		hours     int
-		conf      string
-		glow      string
-		hasData   bool
-		contains  string
+		name     string
+		hours    int
+		conf     string
+		glow     string
+		hasData  bool
+		contains string
 	}{
 		{"极高→✅", 9, "极高", "大烧", true, "✅"},
 		{"高→✅", 7, "高", "中烧", true, "✅"},

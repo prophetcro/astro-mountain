@@ -109,7 +109,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 					fmt.Sprintf("%d", i+1),
 					ep.Start.Format("15:04"),
 					ep.End.Format("15:04"),
-					fmt.Sprintf("%d", ep.HoursCount),
+					episodeHoursLabel(ep),
 					episodeHeightLabel(ep),
 					fmt.Sprintf("%.0f", ep.PeakThickness),
 					boolCN(ep.Submerged, "是", "否"),
@@ -187,9 +187,13 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 		} else {
 			fmt.Fprintf(w, "  云海：%d 段 / 共 %d h\n", len(r.Episodes), r.CloudSeaHours)
 			for i, ep := range r.Episodes {
-				fmt.Fprintf(w, "    [%d] %s→%s  %s  厚%.0fm\n", i+1,
-					ep.Start.Format("15:04"), ep.End.Format("15:04"),
+				fmt.Fprintf(w, "    [%d] %s→%s  %dh  %s  厚%.0fm\n", i+1,
+					ep.Start.Format("15:04"), ep.End.Format("15:04"), ep.HoursCount,
 					episodeHeightLabel(ep), ep.PeakThickness)
+				if ep.MissingHours > 0 {
+					fmt.Fprintf(w, "        注：该时段中间有 %d 个时次廓线缺测，未计入时长\n",
+						ep.MissingHours)
+				}
 			}
 		}
 		fmt.Fprintf(w, "  朝霞：%s\n", r.DawnGlow)
@@ -204,11 +208,26 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 }
 
 // episodeHeightLabel 把云顶距机位高差转成可读文案：正=在脚下、负=淹没机位。
+//
+// 淹没型即高山云海典型形态：云从山脚一路堆过机位、脚下没有独立层，
+// 机位处在云层顶部附近。2026-09 之前 Submerged 恒为 false（判定条件与
+// HighestBeneath 互斥），这个分支永远进不来；统一到 ClassifySeaGeometry 后才复活。
 func episodeHeightLabel(ep CloudSeaEpisode) string {
 	if ep.Submerged {
 		return fmt.Sprintf("淹没机位（云顶高于机位 %.0fm）", -ep.TopAGL)
 	}
 	return fmt.Sprintf("机下 %.0fm", ep.TopAGL)
+}
+
+// episodeHoursLabel 渲染时长，缺测时次单独标注。
+//
+// 缺测不计入时长（缺测不等于有云海），但也不切断时段（缺测同样不等于云海散了），
+// 所以这里如实写出「含 N 时次缺测」，让用户知道这段时长里有几小时是模式没给的。
+func episodeHoursLabel(ep CloudSeaEpisode) string {
+	if ep.MissingHours > 0 {
+		return fmt.Sprintf("%d（含 %d 时次缺测）", ep.HoursCount, ep.MissingHours)
+	}
+	return fmt.Sprintf("%d", ep.HoursCount)
 }
 
 // confidenceRank 给诚实五档可信度赋序，供综合推荐排序。

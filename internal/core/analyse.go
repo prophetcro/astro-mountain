@@ -71,8 +71,11 @@ func AnalyseSite(site Site, resp *api.Response, targetNights map[string]bool,
 
 		// 有无云海：机位下方存在一层云（几何成立）且低云量足以形成连续云面。
 		// 与「主要状态/主要诱因」解耦——即便山顶起雾或降水把云海遮住，几何上有就标「有」。
+		// 与云海时段检测、逐小时评级共用同一份几何判定（profile.ClassifySeaGeometry），
+		// 否则会出现「主要状态=云海在脚下」却「云海=无」的自相矛盾——
+		// 淹没型云海（云堆过机位、脚下无独立层）在旧口径下就被判成「无」。
 		cloudSea := "无"
-		if _, ok := profile.HighestBeneath(siteAlt, layers); ok {
+		if profile.ClassifySeaGeometry(siteAlt, layers, cfg.Thresh).Present {
 			low := surface.CloudCoverLow
 			if !low.Valid {
 				low = profile.MaxCCBelow(levels, 2500.0)
