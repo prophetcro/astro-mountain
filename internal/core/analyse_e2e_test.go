@@ -84,6 +84,9 @@ func TestAnalyseSiteCloudSeaCauseAppearsInNote(t *testing.T) {
 	if cur.CloudSea != "有" {
 		t.Fatalf("当前夜云海几何应为「有」，实际 %q（说明 %q）", cur.CloudSea, cur.Note)
 	}
+	if cur.CloudSeaForm != "脚下型" {
+		t.Fatalf("脚下型云海应标 CloudSeaForm=脚下型，实际 %q", cur.CloudSeaForm)
+	}
 	if !strings.Contains(cur.Note, "云海成因") {
 		t.Fatalf("「主要诱因」列未出现云海成因加权，说明 %q", cur.Note)
 	}

@@ -485,8 +485,8 @@ func mkReasonRow(site string, alt float64, iso string, hour int, night,
 }
 
 func TestExportCSVHeaderAndBOM(t *testing.T) {
-	if len(CSVFields) != 31 {
-		t.Fatalf("CSV 字段数 = %d，want 31", len(CSVFields))
+	if len(CSVFields) != 32 {
+		t.Fatalf("CSV 字段数 = %d，want 32", len(CSVFields))
 	}
 	for _, f := range CSVFields {
 		if _, ok := FieldLabels[f]; !ok {
@@ -517,10 +517,10 @@ func TestExportCSVHeaderAndBOM(t *testing.T) {
 		t.Fatalf("CSV 行数 = %d，want %d（表头 + 数据）", len(lines), len(testRows())+1)
 	}
 	header := strings.Split(lines[0], ",")
-	if len(header) != 31 {
-		t.Fatalf("表头列数 = %d，want 31", len(header))
+	if len(header) != 32 {
+		t.Fatalf("表头列数 = %d，want 32", len(header))
 	}
-	if header[0] != "点位" || header[4] != "有数据" || header[30] != "判断说明" {
+	if header[0] != "点位" || header[4] != "有数据" || header[31] != "判断说明" {
 		t.Fatalf("表头不是中文标签：%v", header[:5])
 	}
 
@@ -558,8 +558,8 @@ func TestBuildJSONShape(t *testing.T) {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		t.Fatalf("产物不是合法 JSON：%v", err)
 	}
-	if len(payload.FieldLabels) != 31 {
-		t.Fatalf("field_labels 条目数 = %d，want 31", len(payload.FieldLabels))
+	if len(payload.FieldLabels) != 32 {
+		t.Fatalf("field_labels 条目数 = %d，want 32", len(payload.FieldLabels))
 	}
 	if payload.Meta.Models != "icon_seamless" || payload.Meta.Peak != "2026-08-13" {
 		t.Fatalf("meta 不完整：%+v", payload.Meta)

@@ -217,6 +217,66 @@ func TestMarkdownDetailTableNoCloudSeaColumn(t *testing.T) {
 	}
 }
 
+// TestComputeSiteNightStatsCloudSeaForm 锁死流星雨模式夜间级「云海形态」聚合：
+// 与日出云海模式的 cloudSeaFormOf 同一归并逻辑（脚下型/淹没型/混合/空），
+// 数据源是逐小时 HourRow.CloudSeaForm（源头由 ClassifySeaGeometry 判定）。
+func TestComputeSiteNightStatsCloudSeaForm(t *testing.T) {
+	const night = "2026-08-12"
+	win := [2]time.Time{
+		time.Date(2026, 8, 13, 5, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 13, 7, 0, 0, 0, time.UTC),
+	}
+	inWin := time.Date(2026, 8, 13, 6, 0, 0, 0, time.UTC)
+	mk := func(cloudSea, form string) model.HourRow {
+		r := mkCloudSeaRow("A", night, 23, model.RATING_OK, cloudSea, "", inWin)
+		r.CloudSeaForm = form
+		return r
+	}
+	cases := []struct {
+		name string
+		rows []model.HourRow
+		want string
+	}{
+		{name: "无云海→空", rows: []model.HourRow{mk("无", ""), mk("无", "")}, want: ""},
+		{name: "全脚下型→脚下型", rows: []model.HourRow{mk("有", "脚下型"), mk("有", "脚下型")}, want: "脚下型"},
+		{name: "全淹没型→淹没型", rows: []model.HourRow{mk("有", "淹没型")}, want: "淹没型"},
+		{name: "混合→脚下型+淹没型", rows: []model.HourRow{mk("有", "脚下型"), mk("有", "淹没型")}, want: "脚下型+淹没型"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := ComputeSiteNightStats("A", night, c.rows, nil, config.Default(), win)
+			if st.CloudSeaForm != c.want {
+				t.Fatalf("CloudSeaForm = %q, want %q", st.CloudSeaForm, c.want)
+			}
+		})
+	}
+}
+
+// TestNightCloudSeaFormDirect 直接锁死归并函数本身（与日出 cloudSeaFormOf 同源），
+// 仅看逐小时 CloudSeaForm 的归并，不依赖窗口/评级等其他逻辑。
+func TestNightCloudSeaFormDirect(t *testing.T) {
+	below := model.HourRow{CloudSea: "有", CloudSeaForm: "脚下型"}
+	sub := model.HourRow{CloudSea: "有", CloudSeaForm: "淹没型"}
+	cases := []struct {
+		name string
+		rows []model.HourRow
+		want string
+	}{
+		{"空切片→空", nil, ""},
+		{"无云海行忽略", []model.HourRow{{CloudSea: "无"}}, ""},
+		{"单脚下型", []model.HourRow{below}, "脚下型"},
+		{"单淹没型", []model.HourRow{sub}, "淹没型"},
+		{"混合", []model.HourRow{below, sub}, "脚下型+淹没型"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := nightCloudSeaForm(c.rows); got != c.want {
+				t.Fatalf("nightCloudSeaForm = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // TestInSunriseWindowCrossZone 锁死时区承载不一致的误判回归：
 // 真实数据里 r.Time 以 UTC 承载本地墙钟（本地 05:00 存成 2026-08-22T05:00:00Z），
 // 而 sunriseWin 由 astro.SunriseTime 以 +8 等本地时区承载同一本地墙钟。

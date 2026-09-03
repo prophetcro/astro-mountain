@@ -10,7 +10,7 @@ import (
 )
 
 var CSVFields = []string{
-	"site", "alt", "night", "time", "has_data", "rating", "relation", "cloud_sea",
+	"site", "alt", "night", "time", "has_data", "rating", "relation", "cloud_sea", "cloud_sea_form",
 	"cloud_base_agl", "cloud_base_msl", "cloud_top_agl", "cloud_top_msl",
 	"cloud_thickness", "layer_max_cc", "cloud_low", "cloud_mid", "cloud_high",
 	"visibility", "temp", "dew", "spread", "wind_ms",
@@ -27,6 +27,7 @@ var FieldLabels = map[string]string{
 	"rating":                "评级",
 	"relation":              "云层状态",
 	"cloud_sea":             "云海(有无)",
+	"cloud_sea_form":        "云海形态",
 	"cloud_base_agl":        "云底相对机位(m)",
 	"cloud_base_msl":        "云底海拔(m)",
 	"cloud_top_agl":         "云顶相对机位(m)",
@@ -61,6 +62,7 @@ var FieldNotes = map[string]string{
 	"rating":                "评级：✅通透 / ⚠️风险 / 🔴不宜 / ❓无数据",
 	"relation":              "云层与机位关系：云海在脚下 / 机位在云中 / 云在头顶 / 通透 / 无数据",
 	"cloud_sea":             "有无云海：有=机位下方存在连续云面（云海在脚下几何成立）；无=无。只看几何，与是否起雾/降水无关",
+	"cloud_sea_form":        "云海形态：脚下型=云顶在机位下方（经典云海）；淹没型=机位埋在云顶附近（高山云海典型，人处云中）。仅 cloud_sea=有时有值，否则空",
 	"cloud_base_agl":        "云底相对机位的高度（AGL，米）。负=云底在机位之下、0附近=机位在云中",
 	"cloud_base_msl":        "云底海拔（MSL，米）",
 	"cloud_top_agl":         "云顶相对机位的高度（AGL，米）。负=云顶在机位之下（云海在脚下）",
@@ -106,6 +108,8 @@ func csvValue(row model.HourRow, field string) string {
 		return csvStr(row.Relation)
 	case "cloud_sea":
 		return row.CloudSea
+	case "cloud_sea_form":
+		return row.CloudSeaForm
 	case "cloud_base_agl":
 		return csvInt(row.CloudBaseAGL)
 	case "cloud_base_msl":

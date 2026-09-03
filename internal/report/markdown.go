@@ -271,6 +271,11 @@ type SiteNightStats struct {
 	// 「辐射雾」档：日出窗内 note 含"辐射雾"字样（贴地+静风+晴夜少云的雾场景）。
 	// 优先级：云海可见 > 辐射雾遮蔽 > 其他遮蔽 > 无。
 	CloudSea string
+
+	// CloudSeaForm 夜间级云海形态聚合（与日出云海模式同源）：
+	// 脚下型 / 淹没型 / 脚下型+淹没型（同一夜混合）/ 空（无云海）。
+	// 由逐小时 CloudSeaForm 归并，不重复实现几何判定。
+	CloudSeaForm string
 }
 
 func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
@@ -405,6 +410,10 @@ func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
 		st.CloudSea = "无"
 	}
 
+	// 夜间云海形态：归并逐小时 CloudSeaForm（脚下型/淹没型），混合则标「脚下型+淹没型」。
+	// 与日出云海模式的 cloudSeaFormOf 同一归并逻辑，只是数据源是逐小时 HourRow。
+	st.CloudSeaForm = nightCloudSeaForm(valid)
+
 	switch {
 	case len(valid) == 0:
 		st.Verdict = "❓ 无有效预报，请临近再跑"
@@ -418,6 +427,36 @@ func ComputeSiteNightStats(siteName, night string, rows []model.HourRow,
 		st.Verdict = "🔴 建议放弃该点位"
 	}
 	return st
+}
+
+// nightCloudSeaForm 归并逐小时云海形态为夜间级标签。
+//
+// 无 CloudSea=="有" 的时次 → 空串；同时存在脚下型与淹没型 → 「脚下型+淹没型」；
+// 仅淹没型 → 「淹没型」；否则（全为脚下型）→ 「脚下型」。
+// 形态取值直接取自逐小时 HourRow.CloudSeaForm（源头由 ClassifySeaGeometry 判定），
+// 不在此处重新实现几何逻辑，避免与云海判定权威口径分叉。
+func nightCloudSeaForm(rows []model.HourRow) string {
+	below, submerged := 0, 0
+	for _, r := range rows {
+		if r.CloudSea != "有" {
+			continue
+		}
+		if r.CloudSeaForm == "淹没型" {
+			submerged++
+		} else {
+			below++
+		}
+	}
+	switch {
+	case below == 0 && submerged == 0:
+		return ""
+	case below > 0 && submerged > 0:
+		return "脚下型+淹没型"
+	case submerged > 0:
+		return "淹没型"
+	default:
+		return "脚下型"
+	}
 }
 
 // inSunriseWindow 判断时刻 t 是否落在日出拍摄窗口内。

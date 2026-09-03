@@ -374,10 +374,16 @@ func SummariseSiteNight(siteName string, rows []model.HourRow,
 	bad := filterRating(core, model.RATING_BAD)
 
 	hasSea := false
+	seaSubmerged, seaBelow := false, false
 	for _, r := range core {
-		if r.CloudSea == "有" {
-			hasSea = true
-			break
+		if r.CloudSea != "有" {
+			continue
+		}
+		hasSea = true
+		if r.CloudSeaForm == "淹没型" {
+			seaSubmerged = true
+		} else {
+			seaBelow = true
 		}
 	}
 
@@ -450,8 +456,17 @@ func SummariseSiteNight(siteName string, rows []model.HourRow,
 		verdict = "🔴 建议放弃该点位"
 	}
 	// 云海提示与「主要状态」解耦：即便山顶起雾/降水把云海遮住，几何上有就补一句。
+	// 形态感知：淹没型（机位埋在云顶附近）与脚下型（云顶在机位下方）给不同指引，
+	// 不再笼统写「脚下有云海（机位下方）」——那对淹没型是错的（人其实在云中）。
 	if hasSea && !strings.Contains(detail, "云海") {
-		detail += "；脚下有云海（机位下方），但被雾/云遮住时不可见"
+		switch {
+		case seaSubmerged && seaBelow:
+			detail += "；云海形态混合（脚下型+淹没型），脚下有云海但机位也可能埋在云中"
+		case seaSubmerged:
+			detail += "；机位被云顶淹没（脚下有云海，人处云中），可守候云隙破云"
+		default:
+			detail += "；脚下有云海（机位下方），但被雾/云遮住时不可见"
+		}
 	}
 	return head + "；" + detail + "；" + verdict
 }

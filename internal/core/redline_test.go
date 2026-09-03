@@ -330,10 +330,10 @@ Tomorrow.io 是付费配额 API，默认轨绝不许碰它——这是 D4-6 红�
 }
 
 const (
-	redlineBaselineClearSingle    = "a495cf6a59c0cc9d5a535e89dc01e1a7e3193b19141dde660ddb89e7584cd9e0"
-	redlineBaselineClearMulti     = "d7c3fccc823633ac475ac1342ea688e20cdec54414366b367b1c9fd46ab9352d"
-	redlineBaselineOvercastSingle = "5fd5455ff230e06e7a8706eb73835d1dc390a901d035cd60a1c5ed783f7f7190"
-	redlineBaselineOvercastMulti  = "9e63117a58fc2454aa1e2779c8faecf479ee6de96ae8de4fd435d1df439c282d"
+	redlineBaselineClearSingle    = "e9b2f17ec7ae8fe94cd0c65908fec112b09ba0a3efc73f9011187e577846e805"
+	redlineBaselineClearMulti     = "00d474b55ca7cf7508ac2bb57ad81233acbd88dcf8f4d7924da172e7daccb49f"
+	redlineBaselineOvercastSingle = "39aaee24869415da45348092406bf44d9adf1cbaf61c924173fef830476adee1"
+	redlineBaselineOvercastMulti  = "8c2f74f94715d6b422679c75fb93476ce7667e559a10eb69099308775c975db1"
 )
 
 func TestSourceDefaultByteIdentical(t *testing.T) {

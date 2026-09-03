@@ -280,6 +280,12 @@ type HourRow struct {
 	// 有=机位下方存在连续云面（云海在脚下几何成立）；无=无。取值 "有"/"无"。
 	CloudSea string `json:"cloud_sea"`
 
+	// CloudSeaForm 云海形态（仅当 CloudSea=="有" 时有值）：
+	// 脚下型=云顶在机位下方（经典云海）；淹没型=机位埋在云顶附近（高山云海典型）。
+	// 与日出云海模式的 CloudSeaForm 同一口径（均来自 profile.ClassifySeaGeometry）。
+	// 取值 "脚下型" / "淹没型"，无云海时为空串。
+	CloudSeaForm string `json:"cloud_sea_form"`
+
 	CloudLow       OptFloat   `json:"cloud_low"`
 	CloudLowSource NullString `json:"cloud_low_source"`
 	CloudMid       OptFloat   `json:"cloud_mid"`

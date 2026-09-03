@@ -75,13 +75,19 @@ func AnalyseSite(site Site, resp *api.Response, targetNights map[string]bool,
 		// 否则会出现「主要状态=云海在脚下」却「云海=无」的自相矛盾——
 		// 淹没型云海（云堆过机位、脚下无独立层）在旧口径下就被判成「无」。
 		cloudSea := "无"
-		if profile.ClassifySeaGeometry(siteAlt, layers, cfg.Thresh).Present {
+		cloudSeaForm := ""
+		if cls := profile.ClassifySeaGeometry(siteAlt, layers, cfg.Thresh); cls.Present {
 			low := surface.CloudCoverLow
 			if !low.Valid {
 				low = profile.MaxCCBelow(levels, 2500.0)
 			}
 			if low.Valid && low.V >= cloudSeaDeckLowCC {
 				cloudSea = "有"
+				if cls.Kind == profile.SEA_SUBMERGED {
+					cloudSeaForm = "淹没型"
+				} else {
+					cloudSeaForm = "脚下型"
+				}
 			}
 		}
 		note := ev.Note
@@ -137,6 +143,8 @@ func AnalyseSite(site Site, resp *api.Response, targetNights map[string]bool,
 			Note:     note,
 
 			CloudSea: cloudSea,
+
+			CloudSeaForm: cloudSeaForm,
 
 			CloudLow:       model.RoundOpt(cloudLow, 0),
 			CloudLowSource: model.Str(cloudLowSrc),

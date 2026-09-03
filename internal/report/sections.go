@@ -277,7 +277,7 @@ func mdDetailSection(rows []model.HourRow, compare []model.ModelCompareRow,
 	}
 
 	headers := []string{"点位", "海拔m", "有效h", "通透h", "风险h", "不宜h",
-		"最佳连续通透窗口", "云底AGL范围m", "云顶AGL范围m", "主要状态", "主要诱因", "结论"}
+		"最佳连续通透窗口", "云底AGL范围m", "云顶AGL范围m", "云海形态", "主要状态", "主要诱因", "结论"}
 
 	for _, night := range nights {
 		lines = append(lines,
@@ -303,6 +303,7 @@ func mdDetailSection(rows []model.HourRow, compare []model.ModelCompareRow,
 				st.BestWindow,
 				fmtRange(st.BaseAGLMin, st.BaseAGLMax, st.Valid > 0),
 				fmtRange(st.TopAGLMin, st.TopAGLMax, st.Valid > 0),
+				orDash(st.CloudSeaForm),
 				annotateRelation(relLabel, st.MainReason),
 				st.MainReason,
 				st.Verdict,
