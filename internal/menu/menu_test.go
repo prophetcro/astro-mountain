@@ -164,7 +164,7 @@ func TestEOFMidFlowExitsSafely(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("流程中 EOF 退出码 = %d，期望 0", code)
 	}
-	mustContain(t, out, "步骤 1/4：日期范围")
+	mustContain(t, out, "步骤 1/6：运行模式")
 }
 
 func TestCanceledContextExitsGracefully(t *testing.T) {
@@ -360,8 +360,9 @@ func TestValidateConfigCommandReportsProblems(t *testing.T) {
 
 func TestReportFlowRejectsBadDates(t *testing.T) {
 	input := strings.Join([]string{
-		"1",
-		"1",
+		"1", // 主菜单 [1]
+		"1", // 步骤 1/6 模式 → 流星雨
+		"1", // 步骤 2/6 日期 → 极大日 + 天数
 		"2026-13-01",
 		"2026-02-30",
 		"abcd-ef-gh",
@@ -387,19 +388,17 @@ func TestReportFlowStepsAndBackNavigation(t *testing.T) {
 		site("括苍山", 28.8101, 120.9221, 1382.6),
 	})
 	input := strings.Join([]string{
-		"1",
-		"1",
+		"1", // 主菜单 → [1] 生成评估报告
+		"1", // 步骤 1/6 模式 → 流星雨
+		"1", // 步骤 2/6 日期 → 极大日 + 天数
 		"2026-08-13",
 		"2",
-		"2",
-		"none",
-		"",
-		"1",
-		"",
-		"",
-		"",
-		"b",
-		"0",
+		"1", // 步骤 3/6 点位 → 全部
+		"", // 步骤 4/6 导出 → 确认
+		"", // 步骤 5/6 高级 → 跳过
+		"Y", // 步骤 6/6 确认 → 执行
+		"", // 执行后 pause
+		"0", // 主菜单退出
 	}, "\n") + "\n"
 
 	code, out := runMenu(t, input, func(o *Options) { o.SitesPath = path })
@@ -407,27 +406,30 @@ func TestReportFlowStepsAndBackNavigation(t *testing.T) {
 		t.Fatalf("退出码 = %d，期望 0", code)
 	}
 	mustContain(t, out,
-		"步骤 1/4：日期范围",
+		"步骤 1/6：运行模式",
+		"步骤 2/6：日期范围（流星雨）",
 		"已确定观测夜：2026-08-11 ~ 2026-08-13，共 3 夜",
-		"步骤 2/4：点位选择",
-		"请至少选择一个点位",
-		"已选 1 个点位：牵牛岗",
-		"步骤 3/4：导出内容",
-		"步骤 4/4：高级选项",
+		"步骤 3/6：点位选择",
+		"步骤 4/6：导出内容",
+		"步骤 5/6：高级选项",
 		"── 确认 ",
 		"等价命令 astro-mountain --peak 2026-08-13 --days 2",
+		"执行内核未注入",
 	)
 }
 
 func TestReportFlowCustomRangeRejectsReversedDates(t *testing.T) {
 	input := strings.Join([]string{
-		"1", "2",
+		"1", // 主菜单 [1]
+		"1", // 步骤 1/6 模式 → 流星雨
+		"2", // 步骤 2/6 日期 → 自定义区间
 		"2026-08-14",
 		"2026-08-10",
 		"2026-08-10",
 		"2026-08-12",
-		"b",
-		"b",
+		"b", // 步骤 3/6 点位 → 返回日期
+		"b", // 步骤 2/6 日期 → 返回模式
+		"b", // 步骤 1/6 模式 → 返回主菜单
 		"0",
 	}, "\n") + "\n"
 
@@ -442,13 +444,17 @@ func TestReportFlowCustomRangeRejectsReversedDates(t *testing.T) {
 func TestReportFlowWithoutEngineDoesNotPanic(t *testing.T) {
 	path := writeSites(t, []config.Site{site("牵牛岗", 30.026, 119.007, 1489.9)})
 	input := strings.Join([]string{
-		"1", "1", "2026-08-13", "0",
-		"1",
-		"",
-		"",
-		"Y",
-		"",
-		"0",
+		"1", // 主菜单 [1]
+		"1", // 步骤 1/6 模式 → 流星雨
+		"1", // 步骤 2/6 日期 → 极大日 + 天数
+		"2026-08-13",
+		"0", // 往前推天数 = 0
+		"1", // 步骤 3/6 点位 → 全部
+		"",  // 步骤 4/6 导出 → 确认
+		"",  // 步骤 5/6 高级 → 跳过
+		"Y", // 步骤 6/6 确认 → 执行
+		"",  // 执行后 pause
+		"0", // 主菜单退出
 	}, "\n") + "\n"
 
 	code, out := runMenu(t, input, func(o *Options) { o.SitesPath = path })
@@ -456,6 +462,24 @@ func TestReportFlowWithoutEngineDoesNotPanic(t *testing.T) {
 		t.Fatalf("退出码 = %d，期望 0", code)
 	}
 	mustContain(t, out, "执行内核未注入")
+}
+
+func TestReportFlowSunriseModeOmitsDouyinHonestly(t *testing.T) {
+	code, out := runMenu(t, "1\n2\n2026-08-15\n1\n\n\nb\n0\n", nil)
+	if code != 0 {
+		t.Fatalf("退出码 = %d，期望 0", code)
+	}
+	mustContain(t, out,
+		"步骤 1/6：运行模式",
+		"日出云海模式",
+		"步骤 2/6：日期（日出云海）",
+		"已确定观测夜：2026-08-14（日出 2026-08-15 当天）",
+		"步骤 4/6：导出内容",
+		"抖音竖图：日出模式不支持",
+		"步骤 5/6：高级选项",
+	)
+	// 日出模式不做抖音图，所以不应把它列为可勾选项（避免「选了又静默关闭」）。
+	mustNotContain(t, out, "抖音竖版图")
 }
 
 func TestDouyinFlowWithoutReportsGivesFriendlyHint(t *testing.T) {

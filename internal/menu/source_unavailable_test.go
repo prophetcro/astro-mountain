@@ -16,7 +16,7 @@ func TestAdvancedMenuRejectsUnavailableSource(t *testing.T) {
 
 	t.Setenv("TOMORROW_API_KEY", "")
 
-	_, out := runMenu(t, "1\n1\n\n\n\n\n1\ntomorrow\n\n\nb\nq\ny\n", nil)
+	_, out := runMenu(t, "1\n1\n1\n2026-08-15\n\n\n\n1\ntomorrow\n\n\nb\nq\ny\n", nil)
 
 	mustContain(t, out, "未采用", "Tomorrow.io", "本版不可用", "请改选其他数据源")
 
@@ -27,7 +27,7 @@ func TestAdvancedMenuRejectsUnavailableSource(t *testing.T) {
 func TestSourceListMarksUnavailableBeforeChoosing(t *testing.T) {
 	t.Setenv("TOMORROW_API_KEY", "")
 
-	_, out := runMenu(t, "1\n1\n\n\n\n\n1\n\n\nb\nq\ny\n", nil)
+	_, out := runMenu(t, "1\n1\n1\n2026-08-15\n\n\n\n1\n\n\nb\nq\ny\n", nil)
 
 	mustContain(t, out, "本版不可用")
 

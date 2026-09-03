@@ -109,12 +109,12 @@ func TestNewReportFormDefaultsToOpenMeteo(t *testing.T) {
 
 func TestAdvancedMenuListsSourceFirst(t *testing.T) {
 
-	_, out := runMenu(t, "1\n1\n\n\n\n\nq\ny\n", nil)
+	_, out := runMenu(t, "1\n1\n1\n2026-08-15\n\n\n\nq\ny\n", nil)
 
 	if strings.Contains(out, "步骤 5/5") {
 		t.Errorf("不该出现「步骤 5/5」——数据源应并入高级选项而非新增步骤\n%s", out)
 	}
-	mustContain(t, out, "步骤 4/4")
+	mustContain(t, out, "步骤 5/6")
 
 	wantOrder := []string{
 		"[1] 数据源",
@@ -141,7 +141,7 @@ func TestAdvancedMenuListsSourceFirst(t *testing.T) {
 
 func TestAdvancedMenuInvalidIndexMentionsSixOptions(t *testing.T) {
 
-	_, out := runMenu(t, "1\n1\n\n\n\n\n9\n\nq\ny\n", nil)
+	_, out := runMenu(t, "1\n1\n1\n2026-08-15\n\n\n\n9\n\nq\ny\n", nil)
 
 	if !strings.Contains(out, "1-6") {
 		t.Errorf("高级选项非法序号错误文案应提示「1-6」，实际却未出现\n%s", out)
@@ -153,7 +153,7 @@ func TestAdvancedMenuInvalidIndexMentionsSixOptions(t *testing.T) {
 }
 
 func TestSourcePickerWarnsQuotaBeforeChoosing(t *testing.T) {
-	_, out := runMenu(t, "1\n1\n\n\n\n\n1\ntomorrow\n\nb\nq\ny\n", nil)
+	_, out := runMenu(t, "1\n1\n1\n2026-08-15\n\n\n\n1\ntomorrow\n\nb\nq\ny\n", nil)
 
 	mustContain(t, out, "500", "25", "3")
 	mustContain(t, out, "Tomorrow.io")

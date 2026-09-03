@@ -79,7 +79,7 @@ func (s *state) reportFlow() error {
 		var err error
 		switch step {
 		case 1:
-			err = s.askDateRange(&f)
+			err = s.askMode(&f)
 			if errors.Is(err, errBack) {
 				return errBack
 			}
@@ -87,27 +87,34 @@ func (s *state) reportFlow() error {
 				step = 2
 			}
 		case 2:
-			err = s.askSiteSelection(&f)
+			err = s.askDateRange(&f)
 			if errors.Is(err, errBack) {
 				step, err = 1, nil
 			} else if err == nil {
 				step = 3
 			}
 		case 3:
-			err = s.askExportOptions(&f)
+			err = s.askSiteSelection(&f)
 			if errors.Is(err, errBack) {
 				step, err = 2, nil
 			} else if err == nil {
 				step = 4
 			}
 		case 4:
-			err = s.askAdvanced(&f)
+			err = s.askExportOptions(&f)
 			if errors.Is(err, errBack) {
 				step, err = 3, nil
 			} else if err == nil {
 				step = 5
 			}
 		case 5:
+			err = s.askAdvanced(&f)
+			if errors.Is(err, errBack) {
+				step, err = 4, nil
+			} else if err == nil {
+				step = 6
+			}
+		case 6:
 			var action string
 			action, err = s.confirmSummary(&f)
 			switch {
@@ -131,23 +138,60 @@ func (s *state) reportFlow() error {
 	}
 }
 
-func (s *state) askDateRange(f *reportForm) error {
+// askMode 是报告流程的第 1 步：先选运行模式（流星雨 / 日出云海），
+// 再决定后续「日期步骤」的语义。日出模式必须 Open-Meteo（A 轨）取气压层剖面
+// 反演云海几何，这里一并锁定数据源，避免用户在后续高级选项里误选
+// tomorrow / meteoblue 后整站 0 数据。
+func (s *state) askMode(f *reportForm) error {
 	u := s.u
 	u.banner("[1] 生成评估报告")
-	u.step("步骤 1/4：日期范围")
-	u.info("[1] 流星雨极大日 + 往前推 N 天      （对应 --peak / --days）")
-	u.info("[2] 自定义起止日期区间              （对应 --start / --end）")
-	u.info(fmt.Sprintf("[3] 用配置里的默认天数 %d 天（以今天为极大日）", s.defaultDays()))
-	u.info("[4] 日出云海模式：指定日出当天日期  （对应 --mode sunrise / --sunrise-date）")
+	u.step("步骤 1/6：运行模式")
+	u.info("[1] 流星雨评估报告（默认）     对应 --peak / --start / --end")
+	u.info("[2] 日出云海模式               对应 --mode sunrise / --sunrise-date")
 	u.info("[b] 返回主菜单")
 
 	def := "1"
 	if f.mode == "sunrise" {
-		def = "4"
-	} else if !f.usePeak {
 		def = "2"
 	}
-	pick, err := u.choice("请选择", []string{"1", "2", "3", "4", "b"}, def, backReturns)
+	pick, err := u.choice("请选择", []string{"1", "2", "b"}, def, backReturns)
+	if err != nil {
+		return err
+	}
+	switch pick {
+	case "b":
+		return errBack
+	case "1":
+		f.mode = "meteor"
+		// 切回流星雨时，解除日出模式对 Open-Meteo 的强制锁定，恢复默认源。
+		if f.source == core.SourceOpenMeteo {
+			f.source = core.DefaultSource
+		}
+	case "2":
+		f.mode = "sunrise"
+		// 日出模式必须 Open-Meteo（A 轨）取气压层剖面反演云海几何，锁定数据源。
+		f.source = core.SourceOpenMeteo
+	}
+	return nil
+}
+
+// askDateRange 根据已选模式分流：流星雨走多夜区间，日出云海只看日出当天。
+func (s *state) askDateRange(f *reportForm) error {
+	if f.mode == "sunrise" {
+		return s.askSunriseDate(f)
+	}
+	u := s.u
+	u.step("步骤 2/6：日期范围（流星雨）")
+	u.info("[1] 流星雨极大日 + 往前推 N 天      （对应 --peak / --days）")
+	u.info("[2] 自定义起止日期区间              （对应 --start / --end）")
+	u.info(fmt.Sprintf("[3] 用配置里的默认天数 %d 天（以今天为极大日）", s.defaultDays()))
+	u.info("[b] 返回上一步（重选模式）")
+
+	def := "1"
+	if !f.usePeak {
+		def = "2"
+	}
+	pick, err := u.choice("请选择", []string{"1", "2", "3", "b"}, def, backReturns)
 	if err != nil {
 		return err
 	}
@@ -157,13 +201,11 @@ func (s *state) askDateRange(f *reportForm) error {
 		return errBack
 
 	case "3":
-		f.mode = "meteor"
 		f.usePeak = true
 		f.peak = s.now().Format(dateLayout)
 		f.days = s.defaultDays()
 
 	case "1":
-		f.mode = "meteor"
 		f.usePeak = true
 		peak, derr := u.askDate("极大日  YYYY-MM-DD", f.peak)
 		if derr != nil {
@@ -176,7 +218,6 @@ func (s *state) askDateRange(f *reportForm) error {
 		f.peak, f.days = peak, days
 
 	case "2":
-		f.mode = "meteor"
 		f.usePeak = false
 		for {
 			start, derr := u.askDate("起始日期  YYYY-MM-DD", f.start)
@@ -200,17 +241,6 @@ func (s *state) askDateRange(f *reportForm) error {
 			f.start, f.end = start, end
 			break
 		}
-
-	case "4":
-		f.mode = "sunrise"
-		f.usePeak = false
-		// 日出模式强制 Open-Meteo（A 轨，需要气压层剖面），菜单里锁定该源。
-		f.source = core.SourceOpenMeteo
-		sd, derr := u.askDate("日出当天  YYYY-MM-DD", f.sunriseDate)
-		if derr != nil {
-			return derr
-		}
-		f.sunriseDate = sd
 	}
 
 	nights := f.nights()
@@ -220,6 +250,40 @@ func (s *state) askDateRange(f *reportForm) error {
 	}
 	u.ok(fmt.Sprintf("已确定观测夜：%s ~ %s，共 %d 夜",
 		nights[0], nights[len(nights)-1], len(nights)))
+
+	if warn := s.forecastRangeWarning(f); warn != "" {
+		u.warn(warn)
+		yes, cerr := u.confirm("仍要继续？", false)
+		if cerr != nil {
+			return cerr
+		}
+		if !yes {
+			return errBack
+		}
+	}
+	return nil
+}
+
+// askSunriseDate 是日出云海模式下的「日期步骤」：只看日出当天那一个观测夜。
+// 与流星雨模式不同，日出模式不需要「极大日 + 往前 N 天」或区间，单日期即可。
+func (s *state) askSunriseDate(f *reportForm) error {
+	u := s.u
+	u.step("步骤 2/6：日期（日出云海）")
+	u.info("日出云海模式只看「日出当天」那一个观测夜（对应 --sunrise-date）")
+	u.info("[b] 返回上一步（重选模式）")
+
+	sd, derr := u.askDate("日出当天  YYYY-MM-DD", f.sunriseDate)
+	if derr != nil {
+		return derr
+	}
+	f.sunriseDate = sd
+
+	nights := f.nights()
+	if len(nights) == 0 {
+		u.fail("未能推导出观测夜，请重新输入日期")
+		return errBack
+	}
+	u.ok(fmt.Sprintf("已确定观测夜：%s（日出 %s 当天）", nights[0], f.sunriseDate))
 
 	if warn := s.forecastRangeWarning(f); warn != "" {
 		u.warn(warn)
@@ -293,7 +357,7 @@ func (s *state) forecastRangeWarning(f *reportForm) string {
 func (s *state) askSiteSelection(f *reportForm) error {
 	u := s.u
 	enabled := s.enabledSites()
-	u.step("步骤 2/4：点位选择")
+	u.step("步骤 3/6：点位选择")
 
 	if len(enabled) == 0 {
 		u.fail("当前没有任何启用的点位，请先到 [3] 点位配置管理里启用或新增")
@@ -411,30 +475,36 @@ func (s *state) printSiteChoiceTable(sites []config.Site, selected []bool) {
 
 func (s *state) askExportOptions(f *reportForm) error {
 	u := s.u
-	u.step("步骤 3/4：导出内容")
+	u.step("步骤 4/6：导出内容")
 
-	labels := []string{"Markdown 报告", "抖音竖版图", "CSV 明细", "JSON 明细"}
+	labels := []string{"Markdown 报告", "CSV 明细", "JSON 明细"}
 	hints := []string{
 		"（关闭对应 --no-report）",
-		"（关闭对应 --no-douyin）",
 		"（开启对应 --csv）",
 		"（开启对应 --json）",
 	}
+	selected := []bool{f.wantMarkdown, f.wantCSV, f.wantJSON}
+
 	if f.mode == "sunrise" {
-		// 抖音竖图按流星雨报告的章节名匹配，日出报告章节不同，选了也出不来。
-		hints[1] = "（日出模式暂不支持，会被自动关闭）"
+		// 日出报告章节与流星雨报告不同，抖音竖图渲染按章节名匹配，无法出图。
+		// 既然做不出来，就不把它列为可勾选项（避免「选了又被静默关闭」的困惑），
+		// 而是明确告知原因与替代路径。
+		u.info("抖音竖图：日出模式不支持（竖图渲染按流星雨报告的章节名匹配，")
+		u.info("  日出报告章节不同，勾了也出不了图），本步不提供该选项。")
+		u.info("  需要抖音竖图请改用「流星雨模式」生成报告，再到主菜单 [2] 仅生成抖音图片。")
+		f.wantDouyin = false
+	} else {
+		labels = append(labels, "抖音竖版图")
+		hints = append(hints, "（关闭对应 --no-douyin）")
+		selected = append(selected, f.wantDouyin)
 	}
-	selected := []bool{f.wantMarkdown, f.wantDouyin, f.wantCSV, f.wantJSON}
 
 	if err := u.multiSelect(labels, hints, selected, true, "请至少选择一种导出内容"); err != nil {
 		return err
 	}
-	f.wantMarkdown, f.wantDouyin, f.wantCSV, f.wantJSON =
-		selected[0], selected[1], selected[2], selected[3]
-	if f.mode == "sunrise" && f.wantDouyin {
-		u.warn("日出模式暂不支持抖音竖图：竖图渲染按流星雨报告的章节名匹配，已自动关闭")
-		f.wantDouyin = false
-		selected[1] = false
+	f.wantMarkdown, f.wantCSV, f.wantJSON = selected[0], selected[1], selected[2]
+	if f.mode != "sunrise" {
+		f.wantDouyin = selected[3]
 	}
 
 	if f.wantDouyin && !f.wantMarkdown {
@@ -459,7 +529,7 @@ func (s *state) askExportOptions(f *reportForm) error {
 func (s *state) askAdvanced(f *reportForm) error {
 	u := s.u
 	for {
-		u.step("步骤 4/4：高级选项  （回车跳过，使用当前配置）")
+		u.step("步骤 5/6：高级选项  （回车跳过，使用当前配置）")
 		u.info("[1] 数据源      " + sourceLine(f.effectiveSource()))
 		u.info("[2] 气象模式    " + f.models)
 		u.info("[3] 输出目录    " + f.outDir)
