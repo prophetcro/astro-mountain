@@ -20,16 +20,20 @@ const helpTemplate = `astro-mountain %s — 山地星空 / 流星雨低云海拔
                                  云海距机位高度、朝霞强度（无/小烧/中烧/大烧）、
                                  建议抵达机位时间；不产出逐小时 CSV/JSON，
                                  也不支持抖音竖图（竖图按流星雨报告章节名匹配）
-  --sunrise-date YYYY-MM-DD[,YYYY-MM-DD...]
+  --sunrise-date YYYY-MM-DD
                         配合 --mode sunrise：日出当天日期（不是前一夜）。
                         工具自动取该日【前一夜】的预报并覆盖到日出之后。
-                        支持逗号分隔多个日期一次查多日，如
-                        --sunrise-date 2026-08-14,2026-08-15,2026-08-16
-                        （最多 16 个，与 Open-Meteo 16 天预报窗口对齐）
+                        复用流星雨同款范围语义，两种方式一次查多日：
+                          · --sunrise-date X --days N：X 为最晚日出当天，
+                            往前推 N 天（N 缺省 0 = 单日），共 N+1 个清晨
+                          · --start A --end B：日出当天闭区间 [A, B]，含两端
+                        （最多往前推 16 天，与 Open-Meteo 16 天预报窗口对齐）
 
 时间范围（流星雨模式，--peak 与 --start/--end 二选一，不可混用）：
   --peak   YYYY-MM-DD   流星雨极大日
-  --days   N            配合 --peak：在极大日基础上额外向前包含 N 天（N ≥ 1）
+  --days   N            配合 --peak（或 --mode sunrise 的 --sunrise-date）：
+                        在锚点日基础上额外向前包含 N 天
+                        （流星雨模式 N ≥ 1；日出模式 N 可为 0 表示仅当日）。
                         未指定时取配置 output.default_days
   --start  YYYY-MM-DD   起始日期（必须与 --end 成对出现）
   --end    YYYY-MM-DD   结束日期（不得早于 --start）
@@ -93,8 +97,11 @@ const helpTemplate = `astro-mountain %s — 山地星空 / 流星雨低云海拔
   # 7. 日出云海模式：看 8 月 14 日清晨的云海与朝霞（自动取 8/13 夜的预报）
   astro-mountain --mode sunrise --sunrise-date 2026-08-14
 
-  # 8. 日出云海模式一次查多日：连看 8/14、8/15、8/16 三个清晨（报告按日期分节）
-  astro-mountain --mode sunrise --sunrise-date 2026-08-14,2026-08-15,2026-08-16
+  # 8. 日出云海模式一次查多日：以 8/16 为最晚，连看 8/14~8/16 三个清晨（报告按日期分节）
+  astro-mountain --mode sunrise --sunrise-date 2026-08-16 --days 2
+
+  # 9. 日出云海模式显式区间：看 8/14~8/16 三个清晨（日出当天闭区间 [A,B]）
+  astro-mountain --mode sunrise --start 2026-08-14 --end 2026-08-16
 `
 
 func HelpText(version string) string {

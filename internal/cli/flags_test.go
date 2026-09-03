@@ -376,51 +376,85 @@ func TestBuildRunParams_NoDateFallsBackToToday(t *testing.T) {
 	}
 }
 
-// TestValidate_SunriseRequiresDate 锁死：日出模式必须配合 --sunrise-date，
-// 且日出模式与 --peak 不互斥（peak 被忽略），但缺日期必须报错。
+// TestValidate_SunriseRequiresDate 锁死：日出模式两种多日形式各自合法，
+// 且日出模式与 --peak 互斥、缺日期必须报错。
 func TestValidate_SunriseRequiresDate(t *testing.T) {
-	// 缺日期 → 报错
+	// 既缺 --sunrise-date 也缺 --start/--end → 报错
 	o := mustParse(t, "--mode", "sunrise")
 	if err := o.Validate(); err == nil {
-		t.Fatal("日出模式缺 --sunrise-date 应报错，实际通过")
+		t.Fatal("日出模式缺全部日期参数应报错，实际通过")
 	} else if !strings.Contains(err.Error(), "--sunrise-date") {
 		t.Fatalf("错误应点名 --sunrise-date，实际：%v", err)
 	}
 
-	// 有日期 → 通过（即便同时带了 --peak，sunrise 模式忽略之）
-	o2 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-14", "--peak", "2026-08-12")
+	// 形式 A：单日期 → 通过
+	o2 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-14")
 	if err := o2.Validate(); err != nil {
-		t.Fatalf("日出模式（带被忽略的 --peak）应合法，实际：%v", err)
+		t.Fatalf("日出模式单日期应合法，实际：%v", err)
+	}
+
+	// 形式 A：日期 + days → 通过
+	o3 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-16", "--days", "2")
+	if err := o3.Validate(); err != nil {
+		t.Fatalf("日出模式 --sunrise-date + --days 应合法，实际：%v", err)
+	}
+
+	// 形式 B：起止区间 → 通过
+	o4 := mustParse(t, "--mode", "sunrise", "--start", "2026-08-14", "--end", "2026-08-16")
+	if err := o4.Validate(); err != nil {
+		t.Fatalf("日出模式 --start/--end 应合法，实际：%v", err)
+	}
+
+	// 形式 A 与 --peak 互斥 → 报错
+	o5 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-14", "--peak", "2026-08-12")
+	if err := o5.Validate(); err == nil {
+		t.Fatal("日出模式配合 --peak 应报错，实际通过")
+	} else if !strings.Contains(err.Error(), "--peak") {
+		t.Fatalf("错误应点名 --peak 互斥，实际：%v", err)
 	}
 
 	// 日期格式错误 → 报错
-	o3 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "08/14/2026")
-	if err := o3.Validate(); err == nil {
+	o6 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "08/14/2026")
+	if err := o6.Validate(); err == nil {
 		t.Fatal("非法 --sunrise-date 格式应通过校验失败，实际通过")
+	}
+
+	// 形式 B 只给一端 → 报错
+	o7 := mustParse(t, "--mode", "sunrise", "--start", "2026-08-14")
+	if err := o7.Validate(); err == nil {
+		t.Fatal("只给 --start 应报错，实际通过")
 	}
 }
 
-// TestValidate_SunriseMultiDate 锁死：日出模式 --sunrise-date 支持逗号分隔多日期，
-// 且每个日期都必须合法、总数不超上限。
-func TestValidate_SunriseMultiDate(t *testing.T) {
-	// 合法多日期 → 通过
+// TestValidate_SunriseRangeForms 锁死：日出模式两种多日形式（--sunrise-date+--days、
+// --start/--end）各自合法，且 --days 越界 / --end 早于 --start 都会被拦下。
+func TestValidate_SunriseRangeForms(t *testing.T) {
+	// 形式 A：--sunrise-date + --days 多日 → 通过
 	o := mustParse(t, "--mode", "sunrise",
-		"--sunrise-date", "2026-08-14,2026-08-15,2026-08-16")
+		"--sunrise-date", "2026-08-16", "--days", "2")
 	if err := o.Validate(); err != nil {
-		t.Fatalf("日出模式多日期应合法，实际：%v", err)
+		t.Fatalf("日出模式形式A应合法，实际：%v", err)
 	}
 
-	// 含非法子日期 → 报错
+	// 形式 B：--start/--end 区间 → 通过
 	o2 := mustParse(t, "--mode", "sunrise",
-		"--sunrise-date", "2026-08-14,08/15/2026")
-	if err := o2.Validate(); err == nil {
-		t.Fatal("含非法子日期的多日期应通过校验失败，实际通过")
+		"--start", "2026-08-14", "--end", "2026-08-16")
+	if err := o2.Validate(); err != nil {
+		t.Fatalf("日出模式形式B应合法，实际：%v", err)
 	}
 
-	// 空段（尾部逗号）→ 报错
-	o3 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-14,")
+	// --days 越界（>16）→ 报错
+	o3 := mustParse(t, "--mode", "sunrise",
+		"--sunrise-date", "2026-08-16", "--days", "20")
 	if err := o3.Validate(); err == nil {
-		t.Fatal("含空段的多日期应通过校验失败，实际通过")
+		t.Fatal("--days 20 应被拦截，实际通过")
+	}
+
+	// 形式 B：--end 早于 --start → 报错
+	o4 := mustParse(t, "--mode", "sunrise",
+		"--start", "2026-08-16", "--end", "2026-08-14")
+	if err := o4.Validate(); err == nil {
+		t.Fatal("--end 早于 --start 应被拦截，实际通过")
 	}
 }
 
@@ -441,6 +475,29 @@ func TestBuildRunParams_SunriseSkipsDefaultDates(t *testing.T) {
 	if p.Peak != "" || p.Start != "" || p.End != "" {
 		t.Fatalf("日出模式不应回填 Peak/Start/End，实际 Peak=%q Start=%q End=%q",
 			p.Peak, p.Start, p.End)
+	}
+	// 缺省 --days 必须为 0（单日），绝不能被配置里的 DefaultDays(=5) 覆盖。
+	if p.Days != 0 {
+		t.Fatalf("日出模式 --days 缺省应为 0，实际 %d", p.Days)
+	}
+}
+
+// TestBuildRunParams_SunriseDaysPassthrough 锁死：日出模式显式 --days 应原样透传进
+// RunParams.Days，且不被配置里的 DefaultDays 覆盖。
+func TestBuildRunParams_SunriseDaysPassthrough(t *testing.T) {
+	o := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-16", "--days", "2")
+	cfg := config.Default()
+	cfg.Output.DefaultDays = 5
+
+	p := o.BuildRunParams(cfg, nil)
+	if p.Mode != "sunrise" {
+		t.Fatalf("Mode 应为 sunrise，实际 %q", p.Mode)
+	}
+	if p.SunriseDate != "2026-08-16" {
+		t.Fatalf("SunriseDate 应为 2026-08-16，实际 %q", p.SunriseDate)
+	}
+	if p.Days != 2 {
+		t.Fatalf("Days 应为 2，实际 %d（--days 应透传，且不应被 DefaultDays 覆盖）", p.Days)
 	}
 }
 

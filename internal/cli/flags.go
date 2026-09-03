@@ -154,12 +154,36 @@ func (o *Options) Validate() error {
 			"前者强制进交互菜单、后者强制直接执行，请只保留一个")
 	}
 	if o.Mode == "sunrise" {
-		// 日出模式独占：以「日出当天」为锚，忽略 peak/start/end，不与它们混用。
-		if o.SunriseDate == "" {
-			return fmt.Errorf("--mode sunrise 必须配合 --sunrise-date（日出当天 YYYY-MM-DD，可逗号分隔多个日期查多日）")
+		// 日出模式复用流星雨同款范围语义（--sunrise-date + --days 或 --start/--end），
+		// 但不能与 --peak 混用；--days 缺省为 0（单日），可 0~16。
+		if o.Peak != "" {
+			return fmt.Errorf("--mode sunrise 不能配合 --peak（流星雨专属）：请用 --sunrise-date 或 --start/--end")
 		}
-		if _, err := core.ParseSunriseDates(o.SunriseDate); err != nil {
-			return fmt.Errorf("--sunrise-date：%w", err)
+		if o.SunriseDate != "" {
+			if _, err := parseDate("--sunrise-date", o.SunriseDate); err != nil {
+				return err
+			}
+			if o.DaysSet && (o.Days < 0 || o.Days > 16) {
+				return fmt.Errorf("--days 必须介于 0~16（与 Open-Meteo 16 天预报窗口对齐），当前 %d", o.Days)
+			}
+		} else if o.Start != "" || o.End != "" {
+			// 日出当天闭区间，必须成对出现。
+			if o.Start == "" || o.End == "" {
+				return fmt.Errorf("--start 与 --end 必须成对出现（日出模式：日出当天闭区间）")
+			}
+			st, err := parseDate("--start", o.Start)
+			if err != nil {
+				return err
+			}
+			en, err := parseDate("--end", o.End)
+			if err != nil {
+				return err
+			}
+			if en.Before(st) {
+				return fmt.Errorf("--end（%s）不能早于 --start（%s）", o.End, o.Start)
+			}
+		} else {
+			return fmt.Errorf("--mode sunrise 必须指定 --sunrise-date（配合可选 --days 往前推 N 天），或同时指定 --start 与 --end")
 		}
 	} else {
 		if o.Peak != "" && (o.Start != "" || o.End != "") {
@@ -299,7 +323,14 @@ func (o *Options) BuildRunParams(cfg config.Config, stdout io.Writer) core.RunPa
 		Verbose:     o.Verbose,
 	}
 	if p.Mode == "sunrise" {
-		// 日出模式由 SunriseDate 锚定，不需要也不能回填 start/end 默认值。
+		// 日出模式：--days 缺省为 0（单日），不与流星雨的默认天数混用；
+		// 显式给了 --days 才采用，否则一律单日。
+		if o.DaysSet {
+			p.Days = o.Days
+		} else {
+			p.Days = 0
+		}
+		// 日出模式由 SunriseDate 锚定（或 --start/--end 区间），不需要也不能回填 start/end 默认值。
 		//
 		// 抖音竖图按流星雨报告的章节名匹配，日出报告章节不同、渲染不出图。
 		// 这里只认用户显式给的 --douyin，不继承配置里的 auto_douyin，

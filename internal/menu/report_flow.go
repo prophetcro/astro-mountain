@@ -22,6 +22,8 @@ type reportForm struct {
 	// mode 运行模式：空或 "meteor" 为流星雨（默认）；"sunrise" 为日出云海模式。
 	mode        string
 	sunriseDate string
+	// sunriseDays 日出模式形式 A：以 sunriseDate 为最晚日出当天，往前推 N 天（缺省 0 = 单日）。
+	sunriseDays int
 
 	allSites bool
 	picked   []config.Site
@@ -265,35 +267,77 @@ func (s *state) askDateRange(f *reportForm) error {
 	return nil
 }
 
-// askSunriseDate 是日出云海模式下的「日期步骤」：可一次查多个日出当天
-// （逗号分隔，如 2026-08-14,2026-08-15）。与流星雨模式不同，日出模式没有
-// 「极大日 + 往前 N 天」的语义，每个日期就是独立的一个清晨。
+// askSunriseDate 是日出云海模式下的「日期步骤」，复用流星雨同款范围语义：
+// 形式 A 选一个日出当天当锚点 + 往前推 N 天（对齐 --peak + --days）；
+// 形式 B 直接给日出当天闭区间 [A, B]（对齐 --start/--end）。
+// 「当日」= 那一天本身，观测取它前一夜，绝不 bleed 到第二天凌晨。
 func (s *state) askSunriseDate(f *reportForm) error {
 	u := s.u
-	u.step("步骤 2/6：日期（日出云海）")
-	u.info("日出云海模式看「日出当天」的清晨云海与朝霞（对应 --sunrise-date）")
-	u.info("可一次查多日：用逗号分隔多个日期，如 2026-08-14,2026-08-15,2026-08-16")
+	u.step("步骤 2/6：日期范围（日出云海）")
+	u.info("[1] 日出当天 + 往前推 N 天        （对应 --sunrise-date / --days）")
+	u.info("[2] 自定义起止日期区间          （对应 --start / --end，闭区间含两端）")
 	u.info("[b] 返回上一步（重选模式）")
 
-	sd, derr := u.askText("日出当天 YYYY-MM-DD（多日用逗号分隔）", f.sunriseDate,
-		func(v string) error {
-			if _, err := core.ParseSunriseDates(v); err != nil {
-				return err
-			}
-			return nil
-		})
-	if derr != nil {
-		return derr
+	def := "1"
+	if f.sunriseDate == "" && f.start != "" {
+		def = "2"
 	}
-	f.sunriseDate = sd
+	pick, err := u.choice("请选择", []string{"1", "2", "b"}, def, backReturns)
+	if err != nil {
+		return err
+	}
+
+	switch pick {
+	case "b":
+		return errBack
+
+	case "1":
+		// 形式 A：以日出当天为最晚一天，往前推 N 天（缺省 0 = 仅当日）。
+		f.start, f.end = "", ""
+		date, derr := u.askDate("日出当天 YYYY-MM-DD（最晚一天）", f.sunriseDate)
+		if derr != nil {
+			return derr
+		}
+		days, ierr := u.askInt("往前推天数 0-16", 0, 16, f.sunriseDays, true)
+		if ierr != nil {
+			return ierr
+		}
+		f.sunriseDate, f.sunriseDays = date, days
+
+	case "2":
+		// 形式 B：日出当天闭区间 [A, B]。
+		f.sunriseDate = ""
+		for {
+			start, derr := u.askDate("起始日期 YYYY-MM-DD", f.start)
+			if derr != nil {
+				return derr
+			}
+			end, derr := u.askDate("结束日期 YYYY-MM-DD", f.end)
+			if derr != nil {
+				return derr
+			}
+			st, _ := ValidateDate(start)
+			en, _ := ValidateDate(end)
+			if en.Before(st) {
+				u.fail("结束日期不能早于起始日期")
+				continue
+			}
+			if span := int(en.Sub(st).Hours() / 24); span > 16 {
+				u.fail(fmt.Sprintf("起止跨度 %d 天超过 Open-Meteo 的 16 天预报上限", span))
+				continue
+			}
+			f.start, f.end = start, end
+			break
+		}
+	}
 
 	nights := f.nights()
 	if len(nights) == 0 {
-		u.fail("未能推导出观测夜，请重新输入日期")
+		u.fail("未能推导出观测夜，请重新选择日期")
 		return errBack
 	}
 	if len(nights) == 1 {
-		u.ok(fmt.Sprintf("已确定观测夜：%s（日出 %s 当天）", nights[0], f.sunriseDate))
+		u.ok(fmt.Sprintf("已确定观测夜：%s（日出当天 %s）", nights[0], f.sunriseLabel()))
 	} else {
 		u.ok(fmt.Sprintf("已确定 %d 个观测夜：%s ~ %s",
 			len(nights), nights[0], nights[len(nights)-1]))
@@ -312,6 +356,21 @@ func (s *state) askSunriseDate(f *reportForm) error {
 	return nil
 }
 
+// sunriseLabel 返回当前日出模式选定区间的「日出当天」可读描述，供确认信息展示。
+func (f *reportForm) sunriseLabel() string {
+	if f.sunriseDate != "" {
+		if f.sunriseDays > 0 {
+			anchor, err := ValidateDate(f.sunriseDate)
+			if err == nil {
+				return fmt.Sprintf("%s ~ %s",
+					anchor.AddDate(0, 0, -f.sunriseDays).Format(dateLayout), f.sunriseDate)
+			}
+		}
+		return f.sunriseDate
+	}
+	return fmt.Sprintf("%s ~ %s", f.start, f.end)
+}
+
 func (s *state) defaultDays() int {
 	if d := s.cfg.Output.DefaultDays; d > 0 {
 		return d
@@ -321,13 +380,33 @@ func (s *state) defaultDays() int {
 
 func (f reportForm) nights() []string {
 	if f.mode == "sunrise" {
-		dates, err := core.ParseSunriseDates(f.sunriseDate)
-		if err != nil {
+		var days []time.Time
+		if f.sunriseDate != "" {
+			// 形式 A：以日出当天为最晚一天，往前推 sunriseDays 天（缺省 0 = 单日）。
+			anchor, err := ValidateDate(f.sunriseDate)
+			if err != nil {
+				return nil
+			}
+			days = make([]time.Time, 0, f.sunriseDays+1)
+			for d := f.sunriseDays; d >= 0; d-- {
+				days = append(days, anchor.AddDate(0, 0, -d))
+			}
+		} else if f.start != "" && f.end != "" {
+			// 形式 B：日出当天闭区间 [A, B]（含两端）。
+			st, err1 := ValidateDate(f.start)
+			en, err2 := ValidateDate(f.end)
+			if err1 != nil || err2 != nil || en.Before(st) {
+				return nil
+			}
+			for d := st; !d.After(en); d = d.AddDate(0, 0, 1) {
+				days = append(days, d)
+			}
+		} else {
 			return nil
 		}
-		// 每个日出当天对应一个观测夜（回拨一天，NightIDOf 口径），去重升序。
-		out := make([]string, 0, len(dates))
-		for _, d := range dates {
+		// 每个日出当天对应一个观测夜（回拨一天，NightIDOf 口径），绝不 bleed 到第二天凌晨。
+		out := make([]string, 0, len(days))
+		for _, d := range days {
 			out = append(out, d.AddDate(0, 0, -1).Format(dateLayout))
 		}
 		sort.Strings(out)
@@ -763,7 +842,15 @@ func (s *state) equivalentCommand(f *reportForm) string {
 	parts := []string{"astro-mountain"}
 	switch f.mode {
 	case "sunrise":
-		parts = append(parts, "--mode sunrise", "--sunrise-date "+f.sunriseDate)
+		parts = append(parts, "--mode sunrise")
+		if f.sunriseDate != "" {
+			parts = append(parts, "--sunrise-date "+f.sunriseDate)
+			if f.sunriseDays > 0 {
+				parts = append(parts, fmt.Sprintf("--days %d", f.sunriseDays))
+			}
+		} else {
+			parts = append(parts, "--start "+f.start, "--end "+f.end)
+		}
 	default:
 		if f.usePeak {
 			parts = append(parts, "--peak "+f.peak, fmt.Sprintf("--days %d", f.days))
@@ -856,9 +943,19 @@ func (s *state) execute(f *reportForm) error {
 	case "sunrise":
 		// 日出模式必须以 Open-Meteo（A 轨）取气压层剖面反演云海几何，
 		// 无视菜单里可能选过的 tomorrow/meteoblue。
-		params.SunriseDate = f.sunriseDate
 		params.Source = core.SourceOpenMeteo
-		params.Peak, params.Start, params.End = "", "", ""
+		params.Peak = ""
+		if f.sunriseDate != "" {
+			// 形式 A：以 sunriseDate 为最晚日出当天，往前推 sunriseDays 天。
+			params.SunriseDate = f.sunriseDate
+			params.Days = f.sunriseDays
+			params.Start, params.End = "", ""
+		} else {
+			// 形式 B：日出当天闭区间 [start, end]。
+			params.SunriseDate = ""
+			params.Days = 0
+			params.Start, params.End = f.start, f.end
+		}
 	default:
 		if f.usePeak {
 			params.Peak, params.Days = f.peak, f.days

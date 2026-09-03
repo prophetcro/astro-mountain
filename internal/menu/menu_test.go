@@ -465,15 +465,17 @@ func TestReportFlowWithoutEngineDoesNotPanic(t *testing.T) {
 }
 
 func TestReportFlowSunriseModeOmitsDouyinHonestly(t *testing.T) {
-	code, out := runMenu(t, "1\n2\n2026-08-15\n1\n\n\nb\n0\n", nil)
+	// 新流程：主菜单[1] → 模式[2]日出 → 日期形式[1]锚点+天数 → 锚点 2026-08-15 → 天数\0
+	// → 点位[1]全部 → 导出确认 → 高级跳过 → 确认[b]返回主菜单 → [0]退出。
+	code, out := runMenu(t, "1\n2\n1\n2026-08-15\n\n1\n\n\nb\n0\n", nil)
 	if code != 0 {
 		t.Fatalf("退出码 = %d，期望 0", code)
 	}
 	mustContain(t, out,
 		"步骤 1/6：运行模式",
 		"日出云海模式",
-		"步骤 2/6：日期（日出云海）",
-		"已确定观测夜：2026-08-14（日出 2026-08-15 当天）",
+		"步骤 2/6：日期范围（日出云海）",
+		"已确定观测夜：2026-08-14（日出当天 2026-08-15）",
 		"步骤 4/6：导出内容",
 		"抖音竖图：日出模式不支持",
 		"步骤 5/6：高级选项",
