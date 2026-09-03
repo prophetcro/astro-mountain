@@ -39,20 +39,14 @@ func sunriseResultsByDate(results []SunriseSiteResult) ([]string, map[string][]S
 }
 
 // sunriseNightDate 由「日出当天」反推观测夜（前一日，YYYY-MM-DD）。
-// 日出云海的实际拍摄窗口在日出当天的前一夜，报告按观测夜标注才贴合「前一天」的心智，
-// 而不是孤立地强调「日出当天」。
+// 日出云海的实际拍摄窗口在日出当天的前一夜；逐日小节直接用这个「前一天」日期做标题，
+// 既显式标出前夜、又只是个干净的单日期，不堆「观测夜/日出当天」字样（日出时刻在正文里已有）。
 func sunriseNightDate(sunriseDay string) string {
 	t, err := time.Parse("2006-01-02", sunriseDay)
 	if err != nil {
 		return sunriseDay
 	}
 	return t.AddDate(0, 0, -1).Format("2006-01-02")
-}
-
-// sunriseNightLabel 生成某日出当天对应的「观测夜 → 日出」标签，把真正拍摄的
-// 「前一天」（观测夜）显式标出来，不再重复强调「日出当天」。
-func sunriseNightLabel(sunriseDay string) string {
-	return fmt.Sprintf("观测夜 %s（日出 %s）", sunriseNightDate(sunriseDay), sunriseDay)
 }
 
 // sunriseResultsBySite 把结果按站点分组，组内按「日出当天」升序，并返回稳定的站点顺序
@@ -174,27 +168,27 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 	// 多日模式按「站点」分节（每个站点一个 H3，其下按日期升序列出各天），
 	// 避免同一站点散落在多个「日出当天」H3 标题下、在折叠重复锚点的预览器里只显第一天。
 	lines = append(lines, "## 二、各点位日出云海评估", "")
-	if multi {
-		for _, site := range siteOrder {
-			lines = append(lines, fmt.Sprintf("### %s", site), "")
-			for _, r := range bySite[site] {
-				lines = append(lines, fmt.Sprintf("#### %s", sunriseNightLabel(sunriseResultDate(r))), "")
-				lines = append(lines, sunriseSiteDayBody(r)...)
+		if multi {
+			for _, site := range siteOrder {
+				lines = append(lines, fmt.Sprintf("### %s", site), "")
+				for _, r := range bySite[site] {
+					lines = append(lines, fmt.Sprintf("#### %s", sunriseNightDate(sunriseResultDate(r))), "")
+					lines = append(lines, sunriseSiteDayBody(r)...)
+				}
+			}
+		} else {
+			for _, r := range results {
+				lines = append(lines, sunriseSiteDetail(r)...)
 			}
 		}
-	} else {
-		for _, r := range results {
-			lines = append(lines, sunriseSiteDetail(r)...)
-		}
-	}
 
 	// 三、综合结论（多日模式按日出当天分节，单日模式沿用原无小标题结构）
 	lines = append(lines, "## 三、综合结论", "")
 	if len(results) == 0 {
 		lines = append(lines, "本次运行未解析出任何站点结果。", "")
-	} else if multi {
-		for _, d := range order {
-			lines = append(lines, fmt.Sprintf("### %s", sunriseNightLabel(d)), "")
+		} else if multi {
+			for _, d := range order {
+				lines = append(lines, fmt.Sprintf("### %s", sunriseNightDate(d)), "")
 			sumRows := make([][]string, 0, len(byDate[d]))
 			for _, r := range byDate[d] {
 				sumRows = append(sumRows, []string{
@@ -326,8 +320,7 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 		for _, site := range siteOrder {
 			fmt.Fprintf(w, "■ %s\n", site)
 			for _, r := range bySite[site] {
-				fmt.Fprintf(w, "  ── 观测夜 %s → 日出 %s ──\n",
-					sunriseNightDate(sunriseResultDate(r)), sunriseResultDate(r))
+				fmt.Fprintf(w, "  ── %s ──\n", sunriseNightDate(sunriseResultDate(r)))
 				printSunriseSiteDay(w, r)
 			}
 		}
