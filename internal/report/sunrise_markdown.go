@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/model"
@@ -35,6 +36,23 @@ func sunriseResultsByDate(results []SunriseSiteResult) ([]string, map[string][]S
 	}
 	sort.Strings(order)
 	return order, m
+}
+
+// sunriseNightDate 由「日出当天」反推观测夜（前一日，YYYY-MM-DD）。
+// 日出云海的实际拍摄窗口在日出当天的前一夜，报告按观测夜标注才贴合「前一天」的心智，
+// 而不是孤立地强调「日出当天」。
+func sunriseNightDate(sunriseDay string) string {
+	t, err := time.Parse("2006-01-02", sunriseDay)
+	if err != nil {
+		return sunriseDay
+	}
+	return t.AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+// sunriseNightLabel 生成某日出当天对应的「观测夜 → 日出」标签，把真正拍摄的
+// 「前一天」（观测夜）显式标出来，不再重复强调「日出当天」。
+func sunriseNightLabel(sunriseDay string) string {
+	return fmt.Sprintf("观测夜 %s（日出 %s）", sunriseNightDate(sunriseDay), sunriseDay)
 }
 
 // sunriseResultsBySite 把结果按站点分组，组内按「日出当天」升序，并返回稳定的站点顺序
@@ -160,7 +178,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 		for _, site := range siteOrder {
 			lines = append(lines, fmt.Sprintf("### %s", site), "")
 			for _, r := range bySite[site] {
-				lines = append(lines, fmt.Sprintf("#### 日出当天 %s", sunriseResultDate(r)), "")
+				lines = append(lines, fmt.Sprintf("#### %s", sunriseNightLabel(sunriseResultDate(r))), "")
 				lines = append(lines, sunriseSiteDayBody(r)...)
 			}
 		}
@@ -176,7 +194,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 		lines = append(lines, "本次运行未解析出任何站点结果。", "")
 	} else if multi {
 		for _, d := range order {
-			lines = append(lines, fmt.Sprintf("### 日出当天 %s", d), "")
+			lines = append(lines, fmt.Sprintf("### %s", sunriseNightLabel(d)), "")
 			sumRows := make([][]string, 0, len(byDate[d]))
 			for _, r := range byDate[d] {
 				sumRows = append(sumRows, []string{
@@ -193,7 +211,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 				MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "云海可信度", "建议抵达", "结论"}, sumRows)...)
 			lines = append(lines, "")
 			if best := bestSunriseSite(byDate[d]); best != "" {
-				lines = append(lines, fmt.Sprintf("**综合推荐（当日）**：%s（云海时长与可信度综合最优）", best))
+				lines = append(lines, fmt.Sprintf("**综合推荐（该日出）**：%s（云海时长与可信度综合最优）", best))
 			}
 			lines = append(lines, "")
 		}
@@ -308,7 +326,8 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 		for _, site := range siteOrder {
 			fmt.Fprintf(w, "■ %s\n", site)
 			for _, r := range bySite[site] {
-				fmt.Fprintf(w, "  ── 日出当天 %s ──\n", sunriseResultDate(r))
+				fmt.Fprintf(w, "  ── 观测夜 %s → 日出 %s ──\n",
+					sunriseNightDate(sunriseResultDate(r)), sunriseResultDate(r))
 				printSunriseSiteDay(w, r)
 			}
 		}

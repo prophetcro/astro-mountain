@@ -132,9 +132,10 @@ func TestSunriseConfidenceLabelIsPlain(t *testing.T) {
 }
 
 // TestSunriseReportMultiDateGrouping 锁死「日出模式加多日」的渲染分节：
-// 多个日出当天的结果必须按「站点」分节（### 站点名，其下 #### 日出当天 DATE 逐日列出），
-// 而非按日期分节——后者会把同一站点散落到多个日期标题下、在折叠重复锚点的预览器里只显第一天。
-// 元信息「日出当天」行仍显示天数区间，综合结论（第三节）保留按日期分节的逐日汇总表，
+// 多个日出当天的结果必须按「站点」分节（### 站点名，其下以「观测夜 → 日出」逐日列出），
+// 而非按日期分节——后者会把同一站点散落到多个日期标题下、在折叠重复锚点的预览器里只显第一天；
+// 同时每个逐日小节必须以「观测夜（前一天）」为中心标注，不再孤立强调「日出当天」。
+// 元信息「日出当天」行仍显示天数区间，综合结论（第三节）保留按观测夜分节的逐日汇总表，
 // 且每个站点的云海可信度/形态标签仍正常渲染。
 func TestSunriseReportMultiDateGrouping(t *testing.T) {
 	meta := model.ReportMeta{
@@ -168,23 +169,23 @@ func TestSunriseReportMultiDateGrouping(t *testing.T) {
 
 	out := BuildSunriseMarkdownReport(results, meta, cfg)
 
-	// 按站点分节：同一站点只占一个 H3，其下逐日（H4）列出。
+	// 按站点分节：同一站点只占一个 H3，其下逐日以「观测夜（前一天）」为中心标注。
 	if !strings.Contains(out, "### 测试点") {
 		t.Errorf("报告应含按站点分节的「### 测试点」：\n%s", excerpt(out, "测试点"))
 	}
-	if !strings.Contains(out, "#### 日出当天 2026-09-04") {
-		t.Errorf("按站点分节后，测试点下应含「#### 日出当天 2026-09-04」：\n%s", excerpt(out, "日出当天 2026-09-04"))
+	if !strings.Contains(out, "#### 观测夜 2026-09-03（日出 2026-09-04）") {
+		t.Errorf("按站点分节后，测试点下应含「#### 观测夜 2026-09-03（日出 2026-09-04）」：\n%s", excerpt(out, "观测夜 2026-09-03"))
 	}
-	if !strings.Contains(out, "#### 日出当天 2026-09-05") {
-		t.Errorf("按站点分节后，测试点下应含「#### 日出当天 2026-09-05」：\n%s", excerpt(out, "日出当天 2026-09-05"))
+	if !strings.Contains(out, "#### 观测夜 2026-09-04（日出 2026-09-05）") {
+		t.Errorf("按站点分节后，测试点下应含「#### 观测夜 2026-09-04（日出 2026-09-05）」：\n%s", excerpt(out, "观测夜 2026-09-04"))
 	}
 	// 元信息仍显示天数区间。
 	if !strings.Contains(out, "2 天（2026-09-04 ~ 2026-09-05）") {
 		t.Errorf("元信息「日出当天」应显示 2 天区间：\n%s", excerpt(out, "日出当天"))
 	}
-	// 综合结论（第三节）仍按日期分节给出逐日汇总表。
-	if !strings.Contains(out, "### 日出当天 2026-09-04") {
-		t.Errorf("综合结论仍应按日期分节含「### 日出当天 2026-09-04」：\n%s", excerpt(out, "日出当天 2026-09-04"))
+	// 综合结论（第三节）仍按观测夜分节给出逐日汇总表。
+	if !strings.Contains(out, "### 观测夜 2026-09-03（日出 2026-09-04）") {
+		t.Errorf("综合结论仍应按观测夜分节含「### 观测夜 2026-09-03（日出 2026-09-04）」：\n%s", excerpt(out, "观测夜 2026-09-03"))
 	}
 	// 多日时每站点字段级标签仍必须正确渲染。
 	if !strings.Contains(out, "**云海可信度**：") {
