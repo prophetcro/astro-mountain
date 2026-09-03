@@ -3,6 +3,7 @@ package report
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/model"
@@ -54,4 +55,44 @@ func excerpt(s, key string) string {
 		}
 	}
 	return "(无匹配行)"
+}
+
+// TestSunriseConfidenceLabelIsPlain 锁死用户可见的可信度标签为「**可信度**：」，
+// 不得出现冗余的「诚实五档」前缀——它与同报告表格头 / 终端输出已用的「可信度」对齐。
+// 五档分级（极高/高/中/低/极低）作为可信度取值保留，仅去掉表面冗余前缀。
+func TestSunriseConfidenceLabelIsPlain(t *testing.T) {
+	meta := model.ReportMeta{
+		GeneratedAt:    "2026-09-03 09:00:00",
+		Models:         "icon_seamless",
+		Timezone:       "Asia/Shanghai",
+		UTCOffsetHours: 8,
+		Nights:         []string{"2026-09-04"},
+		Sites:          []model.Site{{Name: "测试点", Lat: 30, Lon: 120, Alt: 1000}},
+	}
+	cfg := config.Default()
+
+	r := SunriseSiteResult{
+		Site:           "测试点",
+		SunriseTime:    time.Date(2026, 9, 4, 5, 30, 0, 0, time.UTC),
+		ArriveBy:       time.Date(2026, 9, 4, 4, 0, 0, 0, time.UTC),
+		CloudSeaHours:  3,
+		HasData:        true,
+		DawnGlow:       "中烧",
+		DawnGlowNote:   "云顶高度适中，朝霞中等强度",
+		Confidence:     "中",
+		ConfidenceNote: "云海检出 3 时次、1 段",
+		Rating:         "✅ 可蹲守",
+	}
+	out := BuildSunriseMarkdownReport([]SunriseSiteResult{r}, meta, cfg)
+
+	if !strings.Contains(out, "**可信度**：") {
+		t.Errorf("日出报告应渲染「**可信度**：」标签，实际未找到：\n%s", excerpt(out, "可信度"))
+	}
+	if strings.Contains(out, "**诚实五档可信度**：") {
+		t.Errorf("日出报告不得再出现冗余的「诚实五档」前缀：\n%s", excerpt(out, "诚实五档"))
+	}
+	// 五档分级作为取值仍应正常出现（不为空、非伪造百分比）。
+	if !strings.Contains(out, "中 — 云海检出 3 时次") {
+		t.Errorf("可信度取值（五档分级）应照常渲染，实际：\n%s", excerpt(out, "可信度"))
+	}
 }
