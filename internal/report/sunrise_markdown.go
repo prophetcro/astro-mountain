@@ -41,7 +41,7 @@ func WriteSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 
 // BuildSunriseMarkdownReport 拼装日出云海模式报告的纯文本（Markdown）。
 //
-// 结构：元信息 → 各点位（云海时段表 / 朝霞四档 / 建议抵达时间 / 五档可信度 / 结论）
+// 结构：元信息 → 各点位（云海时段表 / 云海形态 / 朝霞四档 / 建议抵达时间 / 云海可信度 / 结论）
 // → 综合结论汇总表 + 推荐机位。
 func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMeta,
 	cfg config.Config) string {
@@ -120,9 +120,12 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 			lines = append(lines, "")
 		}
 
+		if r.CloudSeaForm != "" {
+			lines = append(lines, fmt.Sprintf("**云海形态**：%s", r.CloudSeaForm), "")
+		}
 		lines = append(lines,
 			fmt.Sprintf("**朝霞强度**：%s — %s", r.DawnGlow, r.DawnGlowNote), "",
-			fmt.Sprintf("**可信度**：%s — %s", r.Confidence, r.ConfidenceNote), "",
+			fmt.Sprintf("**云海可信度**：%s — %s", r.Confidence, r.ConfidenceNote), "",
 			fmt.Sprintf("**一句话结论**：%s", r.Rating), "",
 		)
 	}
@@ -137,6 +140,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 			sumRows = append(sumRows, []string{
 				r.Site,
 				fmt.Sprintf("%d", r.CloudSeaHours),
+				orDash(r.CloudSeaForm),
 				r.DawnGlow,
 				r.Confidence,
 				r.ArriveBy.Format("15:04"),
@@ -144,7 +148,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 			})
 		}
 		lines = append(lines,
-			MDTable([]string{"点位", "云海时长h", "朝霞", "可信度", "建议抵达", "结论"}, sumRows)...)
+			MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "云海可信度", "建议抵达", "结论"}, sumRows)...)
 		lines = append(lines, "")
 		if best := bestSunriseSite(results); best != "" {
 			lines = append(lines, fmt.Sprintf("**综合推荐**：%s（云海时长与可信度综合最优）", best))
@@ -196,8 +200,11 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 				}
 			}
 		}
+		if r.CloudSeaForm != "" {
+			fmt.Fprintf(w, "  云海形态：%s\n", r.CloudSeaForm)
+		}
 		fmt.Fprintf(w, "  朝霞：%s\n", r.DawnGlow)
-		fmt.Fprintf(w, "  可信度：%s\n", r.Confidence)
+		fmt.Fprintf(w, "  云海可信度：%s\n", r.Confidence)
 		fmt.Fprintf(w, "  结论：%s\n", r.Rating)
 	}
 
@@ -230,7 +237,7 @@ func episodeHoursLabel(ep CloudSeaEpisode) string {
 	return fmt.Sprintf("%d", ep.HoursCount)
 }
 
-// confidenceRank 给诚实五档可信度赋序，供综合推荐排序。
+// confidenceRank 给云海可信度五档赋序，供综合推荐排序。
 func confidenceRank(c string) int {
 	switch c {
 	case "极高":

@@ -37,8 +37,8 @@ type CloudSeaEpisode struct {
 //
 // 由 core.BuildSunriseReport 填充，report 负责渲染（Markdown + 终端）。
 // 字段覆盖用户关心的四件事：云海出现/消散时间、云海距机位高度、朝霞强度、
-// 建议抵达时间，以及诚实五档可信度（极高/高/中/低/极低，绝不伪造百分比）
-// 与一句话结论（Rating）。
+// 建议抵达时间，以及云海可信度（五档：极高/高/中/低/极低，绝不伪造百分比）
+// 与一句话结论（Rating）。云海形态（脚下型/淹没型）单独成字段，便于报告与汇总表直接展示。
 type SunriseSiteResult struct {
 	Site          string
 	SunriseTime   time.Time
@@ -47,10 +47,12 @@ type SunriseSiteResult struct {
 	CloudSeaHours int
 	HasData       bool
 
+	CloudSeaForm string // 云海形态：脚下型（云顶在机位下方）/ 淹没型（机位埋在云顶附近）
+
 	DawnGlow     string // 朝霞四档：无 / 小烧 / 中烧 / 大烧
 	DawnGlowNote string
 
-	Confidence     string // 诚实五档：极高 / 高 / 中 / 低 / 极低
+	Confidence     string // 云海可信度（五档）：极高 / 高 / 中 / 低 / 极低
 	ConfidenceNote string
 
 	Rating string // 一句话结论（✅/⚠️/🔴 前缀）

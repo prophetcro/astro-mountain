@@ -57,9 +57,10 @@ func excerpt(s, key string) string {
 	return "(无匹配行)"
 }
 
-// TestSunriseConfidenceLabelIsPlain 锁死用户可见的可信度标签为「**可信度**：」，
-// 不得出现冗余的「诚实五档」前缀——它与同报告表格头 / 终端输出已用的「可信度」对齐。
-// 五档分级（极高/高/中/低/极低）作为可信度取值保留，仅去掉表面冗余前缀。
+// TestSunriseConfidenceLabelIsPlain 锁死用户可见的可信度标签为「**云海可信度**：」，
+// 不得出现冗余的「诚实五档」前缀，也不得再写成笼统的「可信度」——后者会被误以为
+// 是评估朝霞的（朝霞有自己独立的四档「强度」）。云海形态（脚下型/淹没型）单独成行展示。
+// 五档分级（极高/高/中/低/极低）作为云海可信度取值保留，仅去掉表面冗余前缀。
 func TestSunriseConfidenceLabelIsPlain(t *testing.T) {
 	meta := model.ReportMeta{
 		GeneratedAt:    "2026-09-03 09:00:00",
@@ -71,28 +72,62 @@ func TestSunriseConfidenceLabelIsPlain(t *testing.T) {
 	}
 	cfg := config.Default()
 
-	r := SunriseSiteResult{
-		Site:           "测试点",
-		SunriseTime:    time.Date(2026, 9, 4, 5, 30, 0, 0, time.UTC),
-		ArriveBy:       time.Date(2026, 9, 4, 4, 0, 0, 0, time.UTC),
-		CloudSeaHours:  3,
-		HasData:        true,
-		DawnGlow:       "中烧",
-		DawnGlowNote:   "云顶高度适中，朝霞中等强度",
-		Confidence:     "中",
-		ConfidenceNote: "云海检出 3 时次、1 段",
-		Rating:         "✅ 可蹲守",
-	}
-	out := BuildSunriseMarkdownReport([]SunriseSiteResult{r}, meta, cfg)
+	t.Run("有云海→标注云海可信度与形态", func(t *testing.T) {
+		r := SunriseSiteResult{
+			Site:           "测试点",
+			SunriseTime:    time.Date(2026, 9, 4, 5, 30, 0, 0, time.UTC),
+			ArriveBy:       time.Date(2026, 9, 4, 4, 0, 0, 0, time.UTC),
+			CloudSeaHours:  3,
+			HasData:        true,
+			CloudSeaForm:   "脚下型",
+			DawnGlow:       "中烧",
+			DawnGlowNote:   "云顶高度适中，朝霞中等强度",
+			Confidence:     "中",
+			ConfidenceNote: "云海检出 3 时次、1 段",
+			Rating:         "✅ 可蹲守",
+		}
+		out := BuildSunriseMarkdownReport([]SunriseSiteResult{r}, meta, cfg)
 
-	if !strings.Contains(out, "**可信度**：") {
-		t.Errorf("日出报告应渲染「**可信度**：」标签，实际未找到：\n%s", excerpt(out, "可信度"))
-	}
-	if strings.Contains(out, "**诚实五档可信度**：") {
-		t.Errorf("日出报告不得再出现冗余的「诚实五档」前缀：\n%s", excerpt(out, "诚实五档"))
-	}
-	// 五档分级作为取值仍应正常出现（不为空、非伪造百分比）。
-	if !strings.Contains(out, "中 — 云海检出 3 时次") {
-		t.Errorf("可信度取值（五档分级）应照常渲染，实际：\n%s", excerpt(out, "可信度"))
-	}
+		if !strings.Contains(out, "**云海可信度**：") {
+			t.Errorf("日出报告应渲染「**云海可信度**：」标签，实际未找到：\n%s", excerpt(out, "云海可信度"))
+		}
+		if strings.Contains(out, "**可信度**：") {
+			t.Errorf("日出报告不得再写成笼统的「可信度」（易与朝霞强度混淆）：\n%s", excerpt(out, "可信度"))
+		}
+		if strings.Contains(out, "**诚实五档可信度**：") {
+			t.Errorf("日出报告不得再出现冗余的「诚实五档」前缀：\n%s", excerpt(out, "诚实五档"))
+		}
+		if !strings.Contains(out, "**云海形态**：脚下型") {
+			t.Errorf("有云海时应渲染「**云海形态**：脚下型」，实际：\n%s", excerpt(out, "云海形态"))
+		}
+		// 五档分级作为取值仍应正常出现（不为空、非伪造百分比）。
+		if !strings.Contains(out, "中 — 云海检出 3 时次") {
+			t.Errorf("云海可信度取值（五档分级）应照常渲染，实际：\n%s", excerpt(out, "云海可信度"))
+		}
+	})
+
+	t.Run("无云海→隐去形态行且可信度为极低", func(t *testing.T) {
+		r := SunriseSiteResult{
+			Site:           "测试点",
+			SunriseTime:    time.Date(2026, 9, 4, 5, 30, 0, 0, time.UTC),
+			ArriveBy:       time.Date(2026, 9, 4, 4, 0, 0, 0, time.UTC),
+			CloudSeaHours:  0,
+			HasData:        true,
+			CloudSeaForm:   "", // 无云海时段，形态为空，渲染层应跳过该行
+			DawnGlow:       "无",
+			DawnGlowNote:   "无中高云载体",
+			Confidence:     "极低",
+			ConfidenceNote: "预报窗口内未检出云海（机位下方无连续云面）",
+			Rating:         "🔴 该夜无云海、朝霞亦弱",
+		}
+		out := BuildSunriseMarkdownReport([]SunriseSiteResult{r}, meta, cfg)
+
+		if strings.Contains(out, "**云海形态**") {
+			t.Errorf("无云海时不应渲染云海形态行：\n%s", excerpt(out, "云海形态"))
+		}
+		if !strings.Contains(out, "**云海可信度**：极低") {
+			t.Errorf("无云海时云海可信度应为极低：\n%s", excerpt(out, "云海可信度"))
+		}
+	})
 }
+

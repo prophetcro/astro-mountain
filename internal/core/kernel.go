@@ -786,8 +786,8 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		}
 		r := BuildSunriseReport(site, resp, targetNight, sunriseDate, cfg, resp.UTCOffsetSeconds, arriveBufferMin)
 		res.Sunrise = append(res.Sunrise, r)
-		e.logf("[%s] 日出模式聚合：云海 %dh / 朝霞 %s / 可信度 %s",
-			site.Name, r.CloudSeaHours, r.DawnGlow, r.Confidence)
+		e.logf("[%s] 日出模式聚合：云海 %dh / 云海形态[%s] / 朝霞 %s / 云海可信度 %s",
+			site.Name, r.CloudSeaHours, r.CloudSeaForm, r.DawnGlow, r.Confidence)
 	}
 
 	if len(res.Sunrise) == 0 {

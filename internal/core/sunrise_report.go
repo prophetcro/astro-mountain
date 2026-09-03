@@ -22,7 +22,7 @@ import (
 //   - utcOffsetSec：API 响应自带的 UTC 偏移秒数（用于算日出时刻）。
 //   - arriveBufferMin：配置里的 arrive_buffer_min（相对日出的提前缓冲）。
 //
-// 输出 report.SunriseSiteResult（云海时段 / 朝霞四档 / 建议抵达时间 / 诚实五档可信度）。
+// 输出 report.SunriseSiteResult（云海时段 / 云海形态 / 朝霞四档 / 建议抵达时间 / 云海可信度五档）。
 // 注意：类型定义在 report 包，避免 report 反向依赖 core 形成循环引用。
 func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	sunriseDate time.Time, cfg config.Config, utcOffsetSec int, arriveBufferMin int) report.SunriseSiteResult {
@@ -46,6 +46,7 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 		res.CloudSeaHours += e.HoursCount
 	}
 	res.HasData = len(resp.Times) > 0
+	res.CloudSeaForm = cloudSeaFormOf(eps)
 
 	// 朝霞：取离日出时刻最近的整点云量评估（±40min 内），缺测则兜底全夜最大中高云量。
 	glowLow, glowMid, glowHigh := dawnGlowCloud(resp, sunrise)
@@ -151,6 +152,35 @@ func nightVerticalGap(site Site, resp *api.Response, targetNight string, cfg con
 		}
 	}
 	return 0
+}
+
+// cloudSeaFormOf 据云海时段归纳整站点的云海形态，便于报告与汇总表直接展示。
+//
+// 判定：没有任何云海时段 → 空串（渲染层据此跳过）；
+// 若同时存在「脚下型」与「淹没型」→ 「脚下型+淹没型」（混合形态，如实标注）；
+// 仅淹没型 → 「淹没型」；否则（全为脚下型）→ 「脚下型」。
+// Submerged 字段由 ClassifySeaGeometry 统一口径给出，是形态的唯一权威来源，
+// 不在此处重新实现几何判定（重演 P0 漏检教训）。
+func cloudSeaFormOf(eps []report.CloudSeaEpisode) string {
+	if len(eps) == 0 {
+		return ""
+	}
+	submerged, below := 0, 0
+	for _, e := range eps {
+		if e.Submerged {
+			submerged++
+		} else {
+			below++
+		}
+	}
+	switch {
+	case submerged > 0 && below > 0:
+		return "脚下型+淹没型"
+	case submerged > 0:
+		return "淹没型"
+	default:
+		return "脚下型"
+	}
 }
 
 // assessSunriseConfidence 给出云海出现的诚实五档可信度（绝不伪造百分比）。
