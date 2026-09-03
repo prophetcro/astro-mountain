@@ -122,7 +122,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 
 		lines = append(lines,
 			fmt.Sprintf("**朝霞强度**：%s — %s", r.DawnGlow, r.DawnGlowNote), "",
-			fmt.Sprintf("**诚实五档可信度**：%s — %s", r.Confidence, r.ConfidenceNote), "",
+			fmt.Sprintf("**可信度**：%s — %s", r.Confidence, r.ConfidenceNote), "",
 			fmt.Sprintf("**一句话结论**：%s", r.Rating), "",
 		)
 	}
