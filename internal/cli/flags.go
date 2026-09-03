@@ -156,10 +156,10 @@ func (o *Options) Validate() error {
 	if o.Mode == "sunrise" {
 		// 日出模式独占：以「日出当天」为锚，忽略 peak/start/end，不与它们混用。
 		if o.SunriseDate == "" {
-			return fmt.Errorf("--mode sunrise 必须配合 --sunrise-date（日出当天 YYYY-MM-DD）")
+			return fmt.Errorf("--mode sunrise 必须配合 --sunrise-date（日出当天 YYYY-MM-DD，可逗号分隔多个日期查多日）")
 		}
-		if _, err := parseDate("--sunrise-date", o.SunriseDate); err != nil {
-			return err
+		if _, err := core.ParseSunriseDates(o.SunriseDate); err != nil {
+			return fmt.Errorf("--sunrise-date：%w", err)
 		}
 	} else {
 		if o.Peak != "" && (o.Start != "" || o.End != "") {

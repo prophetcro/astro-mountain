@@ -400,6 +400,30 @@ func TestValidate_SunriseRequiresDate(t *testing.T) {
 	}
 }
 
+// TestValidate_SunriseMultiDate 锁死：日出模式 --sunrise-date 支持逗号分隔多日期，
+// 且每个日期都必须合法、总数不超上限。
+func TestValidate_SunriseMultiDate(t *testing.T) {
+	// 合法多日期 → 通过
+	o := mustParse(t, "--mode", "sunrise",
+		"--sunrise-date", "2026-08-14,2026-08-15,2026-08-16")
+	if err := o.Validate(); err != nil {
+		t.Fatalf("日出模式多日期应合法，实际：%v", err)
+	}
+
+	// 含非法子日期 → 报错
+	o2 := mustParse(t, "--mode", "sunrise",
+		"--sunrise-date", "2026-08-14,08/15/2026")
+	if err := o2.Validate(); err == nil {
+		t.Fatal("含非法子日期的多日期应通过校验失败，实际通过")
+	}
+
+	// 空段（尾部逗号）→ 报错
+	o3 := mustParse(t, "--mode", "sunrise", "--sunrise-date", "2026-08-14,")
+	if err := o3.Validate(); err == nil {
+		t.Fatal("含空段的多日期应通过校验失败，实际通过")
+	}
+}
+
 // TestBuildRunParams_SunriseSkipsDefaultDates 锁死：日出模式由 SunriseDate 锚定，
 // BuildRunParams 不应回填 start/end 默认值，也不应触碰 Peak。
 func TestBuildRunParams_SunriseSkipsDefaultDates(t *testing.T) {

@@ -27,7 +27,7 @@ import (
 func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	sunriseDate time.Time, cfg config.Config, utcOffsetSec int, arriveBufferMin int) report.SunriseSiteResult {
 
-	res := report.SunriseSiteResult{Site: site.Name}
+	res := report.SunriseSiteResult{Site: site.Name, SunriseDate: sunriseDate.Format(DateLayout)}
 
 	sunrise, ok := astro.SunriseTime(site.Lat, site.Lon, utcOffsetSec, sunriseDate)
 	if !ok {

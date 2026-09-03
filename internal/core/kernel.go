@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/prophetcro/astro-mountain/internal/api"
@@ -96,18 +97,29 @@ func ResolveRange(p RunParams, w config.WindowConfig) (start, end time.Time,
 	// 观测夜 ID 取日出当天回拨一天（NightIDOf 口径）。
 	if p.Mode == "sunrise" {
 		if p.SunriseDate == "" {
-			return start, end, nil, "", fmt.Errorf("日出模式（--mode sunrise）必须指定 --sunrise-date（日出当天 YYYY-MM-DD）")
+			return start, end, nil, "", fmt.Errorf("日出模式（--mode sunrise）必须指定 --sunrise-date（日出当天 YYYY-MM-DD，可逗号分隔多个日期查多日）")
 		}
-		sd, perr := time.ParseInLocation(DateLayout, p.SunriseDate, time.UTC)
+		dates, perr := ParseSunriseDates(p.SunriseDate)
 		if perr != nil {
-			return start, end, nil, "", fmt.Errorf("--sunrise-date 日期格式应为 YYYY-MM-DD：%w", perr)
+			return start, end, nil, "", perr
 		}
-		targetNight := sd.AddDate(0, 0, -1)
-		start = targetNight
-		end = sd.AddDate(0, 0, 1)
-		nights = []string{targetNight.Format(DateLayout)}
-		desc = fmt.Sprintf("%s 前一夜（含 %s 日出时分）共 1 夜（%s；日出当天 %s）",
-			targetNight.Format(DateLayout), sd.Format(DateLayout), nightWindow, p.SunriseDate)
+		nights = make([]string, 0, len(dates))
+		for _, d := range dates {
+			// 观测夜 ID = 日出当天回拨一天（NightIDOf 口径）。
+			nights = append(nights, d.AddDate(0, 0, -1).Format(DateLayout))
+		}
+		sort.Strings(nights)
+		// 抓数区间覆盖最早一夜 00:00 到最晚日出当天 +1 日 00:00，确保每段前夜与清晨都纳入。
+		start = dates[0].AddDate(0, 0, -1)
+		end = dates[len(dates)-1].AddDate(0, 0, 1)
+		if len(dates) == 1 {
+			desc = fmt.Sprintf("%s 前一夜（含 %s 日出时分）共 1 夜（%s；日出当天 %s）",
+				nights[0], dates[0].Format(DateLayout), nightWindow, p.SunriseDate)
+		} else {
+			desc = fmt.Sprintf("%s ~ %s 共 %d 个日出当天、%d 夜（%s；日出当天 %s）",
+				dates[0].Format(DateLayout), dates[len(dates)-1].Format(DateLayout),
+				len(dates), len(nights), nightWindow, p.SunriseDate)
+		}
 		return start, end, nights, desc, nil
 	}
 
@@ -187,6 +199,50 @@ func formatDates(dates []time.Time) []string {
 		out = append(out, d.Format(DateLayout))
 	}
 	return out
+}
+
+// maxSunriseDays 是多日日出模式允许的最大日出当天个数，与 Open-Meteo 16 天
+// 预报窗口对齐，避免一次请求把整段预报窗口都拉满还超时。
+const maxSunriseDays = 16
+
+// ParseSunriseDates 解析 --sunrise-date 的取值：支持单个日期或逗号分隔的多个日期
+// （如 "2026-08-14" 或 "2026-08-14,2026-08-15,2026-08-16"）。返回按升序去重后的
+// 日出当天（本地日历日）列表。空串、含空段或任一日期非法都返回错误；超过上限也报错。
+//
+// 这是日出模式「多日」能力的唯一日期解析入口，CLI 校验与内核取数都复用它，
+// 避免两处各自实现导致「逗号分隔被某处当成非法」的口径分叉。
+func ParseSunriseDates(s string) ([]time.Time, error) {
+	raw := strings.Split(s, ",")
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("--sunrise-date 不能为空")
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]time.Time, 0, len(raw))
+	for _, part := range raw {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("--sunrise-date 包含空日期（逗号分隔时请不要留空段）")
+		}
+		d, err := time.ParseInLocation(DateLayout, part, time.UTC)
+		if err != nil {
+			return nil, fmt.Errorf("--sunrise-date 日期 %q 格式应为 YYYY-MM-DD：%w", part, err)
+		}
+		key := d.Format(DateLayout)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, d)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("--sunrise-date 未能解析出任何有效日期")
+	}
+	if len(out) > maxSunriseDays {
+		return nil, fmt.Errorf("--sunrise-date 最多支持 %d 个日期（与 Open-Meteo 16 天预报窗口对齐），当前 %d 个",
+			maxSunriseDays, len(out))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	return out, nil
 }
 
 // Run 执行一次完整分析，任何失败都收敛进返回值而不是 panic 或直接退出进程：
@@ -689,12 +745,20 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		res.ExitCode = 2
 		return res
 	}
-	targetNight := nights[0]
-	sunriseDate, perr := time.ParseInLocation(DateLayout, p.SunriseDate, time.UTC)
+	sunriseDates, perr := ParseSunriseDates(p.SunriseDate)
 	if perr != nil {
 		res.Errors = append(res.Errors, "参数错误："+perr.Error())
 		res.ExitCode = 2
 		return res
+	}
+	// 每个日出当天对应一个观测夜（回拨一天）；逐 (夜, 日出当天) 对生成报告。
+	type sunrisePair struct {
+		night string
+		date  time.Time
+	}
+	pairs := make([]sunrisePair, 0, len(sunriseDates))
+	for _, d := range sunriseDates {
+		pairs = append(pairs, sunrisePair{d.AddDate(0, 0, -1).Format(DateLayout), d})
 	}
 	if err := CheckForecastRange(start, end, e.now()); err != nil {
 		res.Errors = append(res.Errors, "参数错误："+err.Error())
@@ -784,10 +848,12 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		if utcOffsetHours != 0 {
 			repOffsetHours = utcOffsetHours
 		}
-		r := BuildSunriseReport(site, resp, targetNight, sunriseDate, cfg, resp.UTCOffsetSeconds, arriveBufferMin)
-		res.Sunrise = append(res.Sunrise, r)
-		e.logf("[%s] 日出模式聚合：云海 %dh / 云海形态[%s] / 朝霞 %s / 云海可信度 %s",
-			site.Name, r.CloudSeaHours, r.CloudSeaForm, r.DawnGlow, r.Confidence)
+		for _, pr := range pairs {
+			r := BuildSunriseReport(site, resp, pr.night, pr.date, cfg, resp.UTCOffsetSeconds, arriveBufferMin)
+			res.Sunrise = append(res.Sunrise, r)
+			e.logf("[%s][%s] 日出模式聚合：云海 %dh / 云海形态[%s] / 朝霞 %s / 云海可信度 %s",
+				site.Name, pr.date.Format(DateLayout), r.CloudSeaHours, r.CloudSeaForm, r.DawnGlow, r.Confidence)
+		}
 	}
 
 	if len(res.Sunrise) == 0 {
@@ -802,8 +868,8 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 	meta := ReportMeta{
 		Mode:           "sunrise",
 		Models:         models,
-		Start:          p.SunriseDate,
-		End:            p.SunriseDate,
+		Start:          sunriseDates[0].Format(DateLayout),
+		End:            sunriseDates[len(sunriseDates)-1].Format(DateLayout),
 		Nights:         nights,
 		NightsDesc:     nightsDesc,
 		Timezone:       e.Cfg.API.Timezone,

@@ -49,6 +49,79 @@ func TestResolveRangeSunriseMissingDate(t *testing.T) {
 	}
 }
 
+// TestResolveRangeSunriseMulti 锁死多日日出模式的区间数学：逗号分隔多个日出当天，
+// 抓数区间为最早一夜 00:00 → 最晚日出当天 +1 日 00:00，观测夜为各日期回拨一天。
+// 这是「日出模式加多日」能力的区间口径单一真相源，避免两处各自实现导致分叉。
+func TestResolveRangeSunriseMulti(t *testing.T) {
+	p := RunParams{Mode: "sunrise", SunriseDate: "2026-08-14,2026-08-15,2026-08-16"}
+	start, end, nights, desc, err := ResolveRange(p, config.Default().Window)
+	if err != nil {
+		t.Fatalf("ResolveRange(sunrise 多日) 意外失败：%v", err)
+	}
+	if got := start.Format(DateLayout); got != "2026-08-13" {
+		t.Errorf("start 应为最早一夜 2026-08-13，实际 %s", got)
+	}
+	if got := end.Format(DateLayout); got != "2026-08-17" {
+		t.Errorf("end 应为最晚日出当天 +1 日 2026-08-17，实际 %s", got)
+	}
+	wantNights := []string{"2026-08-13", "2026-08-14", "2026-08-15"}
+	if len(nights) != len(wantNights) {
+		t.Fatalf("观测夜应为 %v，实际 %v", wantNights, nights)
+	}
+	for i, w := range wantNights {
+		if nights[i] != w {
+			t.Errorf("观测夜[%d] 应为 %s，实际 %s", i, w, nights[i])
+		}
+	}
+	if !strings.Contains(desc, "共 3 个日出当天") {
+		t.Errorf("区间描述应点明 3 个日出当天，实际：%s", desc)
+	}
+}
+
+// TestParseSunriseDates 锁死 --sunrise-date 的解析口径：单日期、逗号多日期、
+// 去重、升序、空段非法、超上限非法。
+func TestParseSunriseDates(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		wantN   int
+		wantErr bool
+	}{
+		{"单日期", "2026-08-14", 1, false},
+		{"逗号多日期", "2026-08-14,2026-08-15,2026-08-16", 3, false},
+		{"含空格容忍", "2026-08-14, 2026-08-15", 2, false},
+		{"重复去重", "2026-08-14,2026-08-14", 1, false},
+		{"乱序升序", "2026-08-16,2026-08-14", 2, false},
+		{"空串", "", 0, true},
+		{"空段", "2026-08-14,", 0, true},
+		{"非法格式", "08/14/2026", 0, true},
+		{"超上限", "2026-08-01,2026-08-02,2026-08-03,2026-08-04,2026-08-05,2026-08-06,2026-08-07,2026-08-08,2026-08-09,2026-08-10,2026-08-11,2026-08-12,2026-08-13,2026-08-14,2026-08-15,2026-08-16,2026-08-17", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ParseSunriseDates(c.in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("ParseSunriseDates(%q) 应报错，实际通过", c.in)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseSunriseDates(%q) 意外失败：%v", c.in, err)
+			}
+			if len(got) != c.wantN {
+				t.Fatalf("ParseSunriseDates(%q) 返回 %d 个，期望 %d", c.in, len(got), c.wantN)
+			}
+			// 升序校验
+			for i := 1; i < len(got); i++ {
+				if !got[i-1].Before(got[i]) {
+					t.Fatalf("结果未按升序排列：%v", got)
+				}
+			}
+		})
+	}
+}
+
 // TestAssessSunriseConfidence 锁死诚实五档可信度的边界，绝不输出伪精度百分比。
 func TestAssessSunriseConfidence(t *testing.T) {
 	cases := []struct {

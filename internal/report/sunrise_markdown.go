@@ -5,20 +5,50 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/model"
 )
 
-// sunriseReportFilename 推导日出报告的固定文件名：以首个结果的日出日期命名，
-// 与流星雨报告的 peak/区间命名区分开，避免同一目录互相覆盖。
-func sunriseReportFilename(results []SunriseSiteResult) string {
-	if len(results) > 0 {
-		d := results[0].SunriseTime.Format("2006-01-02")
-		return fmt.Sprintf("astro_report_sunrise-%s.md", d)
+// sunriseResultDate 取某条日出结果所属的「日出当天」key（用于多日分组）。
+// 优先用显式填好的 SunriseDate 字段；未填时回落 SunriseTime 的日期（兼容旧调用方）。
+func sunriseResultDate(r SunriseSiteResult) string {
+	if r.SunriseDate != "" {
+		return r.SunriseDate
 	}
-	return "astro_report_sunrise.md"
+	return r.SunriseTime.Format("2006-01-02")
+}
+
+// sunriseResultsByDate 把结果按「日出当天」分组，并返回升序的日期列表。
+// 多日模式据此把报告分节；单日模式退化为只有一个分组的列表，调用方据此判断要不要加日期小标题。
+func sunriseResultsByDate(results []SunriseSiteResult) ([]string, map[string][]SunriseSiteResult) {
+	m := make(map[string][]SunriseSiteResult, 8)
+	for _, r := range results {
+		k := sunriseResultDate(r)
+		m[k] = append(m[k], r)
+	}
+	order := make([]string, 0, len(m))
+	for k := range m {
+		order = append(order, k)
+	}
+	sort.Strings(order)
+	return order, m
+}
+
+// sunriseReportFilename 推导日出报告的固定文件名：以日出当天命名，
+// 与流星雨报告的 peak/区间命名区分开，避免同一目录互相覆盖。
+// 多日模式用「首_末」区间命名；单日模式保持原样（astro_report_sunrise-YYYY-MM-DD.md）。
+func sunriseReportFilename(results []SunriseSiteResult) string {
+	if len(results) == 0 {
+		return "astro_report_sunrise.md"
+	}
+	order, _ := sunriseResultsByDate(results)
+	if len(order) == 1 {
+		return fmt.Sprintf("astro_report_sunrise-%s.md", order[0])
+	}
+	return fmt.Sprintf("astro_report_sunrise-%s_%s.md", order[0], order[len(order)-1])
 }
 
 // WriteSunriseMarkdownReport 把日出模式聚合结果写出为 Markdown 报告，返回文件路径。
@@ -49,6 +79,9 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 	lines := make([]string, 0, 256)
 	lines = append(lines, "# 日出云海模式评估报告", "")
 
+	order, byDate := sunriseResultsByDate(results)
+	multi := len(order) > 1
+
 	generated := meta.GeneratedAt
 	if generated == "" {
 		generated = "-"
@@ -65,7 +98,11 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 
 	sunriseDate := "-"
 	if len(results) > 0 {
-		sunriseDate = results[0].SunriseTime.Format("2006-01-02")
+		if multi {
+			sunriseDate = fmt.Sprintf("%d 天（%s ~ %s）", len(order), order[0], order[len(order)-1])
+		} else {
+			sunriseDate = order[0]
+		}
 	}
 	info := [][]string{
 		{"运行模式", "日出云海（云海出现时间 / 距机位高度 / 消散 / 朝霞 / 建议抵达时间）"},
@@ -90,50 +127,48 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 	lines = append(lines, MDTable([]string{"点位", "纬度", "经度", "海拔(m)"}, siteRows)...)
 	lines = append(lines, "")
 
-	// 二、各点位日出云海评估
+	// 二、各点位日出云海评估（多日模式按日出当天分节）
 	lines = append(lines, "## 二、各点位日出云海评估", "")
-	for _, r := range results {
-		lines = append(lines, fmt.Sprintf("### %s", r.Site), "")
-		lines = append(lines, fmt.Sprintf("- 日出时刻：**%s**   建议抵达机位：**%s**",
-			r.SunriseTime.Format("2006-01-02 15:04"),
-			r.ArriveBy.Format("2006-01-02 15:04")), "")
-
-		if len(r.Episodes) == 0 {
-			lines = append(lines, "**云海时段**：该夜未检出连续云面（机位下方无云海）。", "")
-		} else {
-			lines = append(lines,
-				fmt.Sprintf("**云海时段**：%d 段，共 %d 小时", len(r.Episodes), r.CloudSeaHours), "")
-			epRows := make([][]string, 0, len(r.Episodes))
-			for i, ep := range r.Episodes {
-				epRows = append(epRows, []string{
-					fmt.Sprintf("%d", i+1),
-					ep.Start.Format("15:04"),
-					ep.End.Format("15:04"),
-					episodeHoursLabel(ep),
-					episodeHeightLabel(ep),
-					fmt.Sprintf("%.0f", ep.PeakThickness),
-					boolCN(ep.Submerged, "是", "否"),
-				})
+	if multi {
+		for _, d := range order {
+			lines = append(lines, fmt.Sprintf("### 日出当天 %s", d), "")
+			for _, r := range byDate[d] {
+				lines = append(lines, sunriseSiteDetail(r)...)
 			}
-			lines = append(lines,
-				MDTable([]string{"#", "出现", "消散", "时长h", "云顶距机位", "云厚m", "淹没机位"}, epRows)...)
-			lines = append(lines, "")
 		}
-
-		if r.CloudSeaForm != "" {
-			lines = append(lines, fmt.Sprintf("**云海形态**：%s", r.CloudSeaForm), "")
+	} else {
+		for _, r := range results {
+			lines = append(lines, sunriseSiteDetail(r)...)
 		}
-		lines = append(lines,
-			fmt.Sprintf("**朝霞强度**：%s — %s", r.DawnGlow, r.DawnGlowNote), "",
-			fmt.Sprintf("**云海可信度**：%s — %s", r.Confidence, r.ConfidenceNote), "",
-			fmt.Sprintf("**一句话结论**：%s", r.Rating), "",
-		)
 	}
 
-	// 三、综合结论
+	// 三、综合结论（多日模式按日出当天分节，单日模式沿用原无小标题结构）
 	lines = append(lines, "## 三、综合结论", "")
 	if len(results) == 0 {
 		lines = append(lines, "本次运行未解析出任何站点结果。", "")
+	} else if multi {
+		for _, d := range order {
+			lines = append(lines, fmt.Sprintf("### 日出当天 %s", d), "")
+			sumRows := make([][]string, 0, len(byDate[d]))
+			for _, r := range byDate[d] {
+				sumRows = append(sumRows, []string{
+					r.Site,
+					fmt.Sprintf("%d", r.CloudSeaHours),
+					orDash(r.CloudSeaForm),
+					r.DawnGlow,
+					r.Confidence,
+					r.ArriveBy.Format("15:04"),
+					r.Rating,
+				})
+			}
+			lines = append(lines,
+				MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "云海可信度", "建议抵达", "结论"}, sumRows)...)
+			lines = append(lines, "")
+			if best := bestSunriseSite(byDate[d]); best != "" {
+				lines = append(lines, fmt.Sprintf("**综合推荐（当日）**：%s（云海时长与可信度综合最优）", best))
+			}
+			lines = append(lines, "")
+		}
 	} else {
 		sumRows := make([][]string, 0, len(results))
 		for _, r := range results {
@@ -161,7 +196,51 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 	return strings.Join(lines, "\n")
 }
 
+// sunriseSiteDetail 拼装单站点日出云海评估的 Markdown 片段（站点标题 + 云海时段表 /
+// 云海形态 / 朝霞四档 / 云海可信度 / 结论）。抽出来供单日与多日两种分节结构共用，
+// 保证字段渲染完全一致（尤其「云海可信度」「云海形态」标签）。
+func sunriseSiteDetail(r SunriseSiteResult) []string {
+	out := make([]string, 0, 24)
+	out = append(out, fmt.Sprintf("### %s", r.Site), "")
+	out = append(out, fmt.Sprintf("- 日出时刻：**%s**   建议抵达机位：**%s**",
+		r.SunriseTime.Format("2006-01-02 15:04"),
+		r.ArriveBy.Format("2006-01-02 15:04")), "")
+
+	if len(r.Episodes) == 0 {
+		out = append(out, "**云海时段**：该夜未检出连续云面（机位下方无云海）。", "")
+	} else {
+		out = append(out,
+			fmt.Sprintf("**云海时段**：%d 段，共 %d 小时", len(r.Episodes), r.CloudSeaHours), "")
+		epRows := make([][]string, 0, len(r.Episodes))
+		for i, ep := range r.Episodes {
+			epRows = append(epRows, []string{
+				fmt.Sprintf("%d", i+1),
+				ep.Start.Format("15:04"),
+				ep.End.Format("15:04"),
+				episodeHoursLabel(ep),
+				episodeHeightLabel(ep),
+				fmt.Sprintf("%.0f", ep.PeakThickness),
+				boolCN(ep.Submerged, "是", "否"),
+			})
+		}
+		out = append(out,
+			MDTable([]string{"#", "出现", "消散", "时长h", "云顶距机位", "云厚m", "淹没机位"}, epRows)...)
+		out = append(out, "")
+	}
+
+	if r.CloudSeaForm != "" {
+		out = append(out, fmt.Sprintf("**云海形态**：%s", r.CloudSeaForm), "")
+	}
+	out = append(out,
+		fmt.Sprintf("**朝霞强度**：%s — %s", r.DawnGlow, r.DawnGlowNote), "",
+		fmt.Sprintf("**云海可信度**：%s — %s", r.Confidence, r.ConfidenceNote), "",
+		fmt.Sprintf("**一句话结论**：%s", r.Rating), "",
+	)
+	return out
+}
+
 // PrintSunriseReport 在终端紧凑打印日出模式结果。
+// 多日模式按「日出当天」分节，每节内逐站点打印并给出当日综合推荐。
 func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.ReportMeta, cfg config.Config) {
 	_ = cfg
 	width := 56
@@ -171,8 +250,13 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 	fmt.Fprintln(w, line)
 	fmt.Fprintln(w, "日出云海模式评估报告  （气压层剖面反演，非 LCL 估算）")
 	fmt.Fprintln(w, dash)
+	order, byDate := sunriseResultsByDate(results)
 	if len(results) > 0 {
-		fmt.Fprintf(w, "日出当天   : %s\n", results[0].SunriseTime.Format("2006-01-02"))
+		if len(order) > 1 {
+			fmt.Fprintf(w, "日出当天   : %d 天（%s ~ %s）\n", len(order), order[0], order[len(order)-1])
+		} else {
+			fmt.Fprintf(w, "日出当天   : %s\n", order[0])
+		}
 	}
 	fmt.Fprintf(w, "数值模式   : %s\n", meta.Models)
 	names := make([]string, 0, len(meta.Sites))
@@ -182,6 +266,25 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 	fmt.Fprintf(w, "点位(%d) : %s\n", len(meta.Sites), strings.Join(names, "  "))
 	fmt.Fprintln(w, dash)
 
+	if len(order) > 1 {
+		for _, d := range order {
+			fmt.Fprintf(w, "── 日出当天 %s ──\n", d)
+			printSunriseSiteBlock(w, byDate[d])
+			if best := bestSunriseSite(byDate[d]); best != "" {
+				fmt.Fprintf(w, "➜ 综合推荐(当日)：%s\n", best)
+			}
+		}
+	} else {
+		printSunriseSiteBlock(w, results)
+		if best := bestSunriseSite(results); best != "" {
+			fmt.Fprintf(w, "➜ 综合推荐：%s\n", best)
+		}
+	}
+	fmt.Fprintln(w, line)
+}
+
+// printSunriseSiteBlock 打印一组站点（同一日出当天）的终端明细块。
+func printSunriseSiteBlock(w io.Writer, results []SunriseSiteResult) {
 	for _, r := range results {
 		fmt.Fprintf(w, "■ %s\n", r.Site)
 		fmt.Fprintf(w, "  日出 %s   建议抵达 %s\n",
@@ -207,11 +310,6 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 		fmt.Fprintf(w, "  云海可信度：%s\n", r.Confidence)
 		fmt.Fprintf(w, "  结论：%s\n", r.Rating)
 	}
-
-	if best := bestSunriseSite(results); best != "" {
-		fmt.Fprintf(w, "➜ 综合推荐：%s\n", best)
-	}
-	fmt.Fprintln(w, line)
 }
 
 // episodeHeightLabel 把云顶距机位高差转成可读文案：正=在脚下、负=淹没机位。

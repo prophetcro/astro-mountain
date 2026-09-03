@@ -47,6 +47,10 @@ type SunriseSiteResult struct {
 	CloudSeaHours int
 	HasData       bool
 
+	// SunriseDate 该结果对应的「日出当天」YYYY-MM-DD，多日模式用于把报告按日期分节。
+	// 单日模式也填，渲染层优先用它（缺省时回落 SunriseTime 的日期）。
+	SunriseDate string
+
 	CloudSeaForm string // 云海形态：脚下型（云顶在机位下方）/ 淹没型（机位埋在云顶附近）
 
 	DawnGlow     string // 朝霞四档：无 / 小烧 / 中烧 / 大烧

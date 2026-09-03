@@ -131,3 +131,61 @@ func TestSunriseConfidenceLabelIsPlain(t *testing.T) {
 	})
 }
 
+// TestSunriseReportMultiDateGrouping 锁死「日出模式加多日」的渲染分节：
+// 多个日出当天的结果必须按日期分节（### 日出当天 DATE），元信息「日出当天」行
+// 显示天数区间，综合结论也按日期分节，且每个站点的云海可信度/形态标签仍正常渲染。
+func TestSunriseReportMultiDateGrouping(t *testing.T) {
+	meta := model.ReportMeta{
+		GeneratedAt:    "2026-09-03 09:00:00",
+		Models:         "icon_seamless",
+		Timezone:       "Asia/Shanghai",
+		UTCOffsetHours: 8,
+		Nights:         []string{"2026-09-03", "2026-09-04"},
+		Sites:          []model.Site{{Name: "测试点", Lat: 30, Lon: 120, Alt: 1000}},
+	}
+	cfg := config.Default()
+
+	results := []SunriseSiteResult{
+		{
+			Site: "测试点", SunriseDate: "2026-09-04",
+			SunriseTime: time.Date(2026, 9, 4, 5, 30, 0, 0, time.UTC),
+			ArriveBy:    time.Date(2026, 9, 4, 4, 0, 0, 0, time.UTC),
+			CloudSeaHours: 3, HasData: true, CloudSeaForm: "脚下型",
+			DawnGlow: "中烧", DawnGlowNote: "云顶高度适中",
+			Confidence: "中", ConfidenceNote: "云海检出 3 时次", Rating: "✅ 可蹲守",
+		},
+		{
+			Site: "测试点", SunriseDate: "2026-09-05",
+			SunriseTime: time.Date(2026, 9, 5, 5, 30, 0, 0, time.UTC),
+			ArriveBy:    time.Date(2026, 9, 5, 4, 0, 0, 0, time.UTC),
+			CloudSeaHours: 0, HasData: true, CloudSeaForm: "",
+			DawnGlow: "无", DawnGlowNote: "无中高云载体",
+			Confidence: "极低", ConfidenceNote: "未检出云海", Rating: "🔴 该夜无云海",
+		},
+	}
+
+	out := BuildSunriseMarkdownReport(results, meta, cfg)
+
+	if !strings.Contains(out, "### 日出当天 2026-09-04") {
+		t.Errorf("报告应含「### 日出当天 2026-09-04」分节：\n%s", excerpt(out, "日出当天 2026-09-04"))
+	}
+	if !strings.Contains(out, "### 日出当天 2026-09-05") {
+		t.Errorf("报告应含「### 日出当天 2026-09-05」分节：\n%s", excerpt(out, "日出当天 2026-09-05"))
+	}
+	if !strings.Contains(out, "2 天（2026-09-04 ~ 2026-09-05）") {
+		t.Errorf("元信息「日出当天」应显示 2 天区间：\n%s", excerpt(out, "日出当天"))
+	}
+	// 多日时每站点字段级标签仍必须正确渲染。
+	if !strings.Contains(out, "**云海可信度**：") {
+		t.Errorf("多日报告仍应渲染「**云海可信度**：」标签")
+	}
+	if !strings.Contains(out, "**云海形态**：脚下型") {
+		t.Errorf("有云海日期应渲染「**云海形态**：脚下型」")
+	}
+	// 文件名也应体现多日区间。
+	fn := sunriseReportFilename(results)
+	if fn != "astro_report_sunrise-2026-09-04_2026-09-05.md" {
+		t.Errorf("多日文件名应为区间形式，实际 %q", fn)
+	}
+}
+

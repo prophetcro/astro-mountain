@@ -3,6 +3,7 @@ package menu
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -264,15 +265,23 @@ func (s *state) askDateRange(f *reportForm) error {
 	return nil
 }
 
-// askSunriseDate 是日出云海模式下的「日期步骤」：只看日出当天那一个观测夜。
-// 与流星雨模式不同，日出模式不需要「极大日 + 往前 N 天」或区间，单日期即可。
+// askSunriseDate 是日出云海模式下的「日期步骤」：可一次查多个日出当天
+// （逗号分隔，如 2026-08-14,2026-08-15）。与流星雨模式不同，日出模式没有
+// 「极大日 + 往前 N 天」的语义，每个日期就是独立的一个清晨。
 func (s *state) askSunriseDate(f *reportForm) error {
 	u := s.u
 	u.step("步骤 2/6：日期（日出云海）")
-	u.info("日出云海模式只看「日出当天」那一个观测夜（对应 --sunrise-date）")
+	u.info("日出云海模式看「日出当天」的清晨云海与朝霞（对应 --sunrise-date）")
+	u.info("可一次查多日：用逗号分隔多个日期，如 2026-08-14,2026-08-15,2026-08-16")
 	u.info("[b] 返回上一步（重选模式）")
 
-	sd, derr := u.askDate("日出当天  YYYY-MM-DD", f.sunriseDate)
+	sd, derr := u.askText("日出当天 YYYY-MM-DD（多日用逗号分隔）", f.sunriseDate,
+		func(v string) error {
+			if _, err := core.ParseSunriseDates(v); err != nil {
+				return err
+			}
+			return nil
+		})
 	if derr != nil {
 		return derr
 	}
@@ -283,7 +292,12 @@ func (s *state) askSunriseDate(f *reportForm) error {
 		u.fail("未能推导出观测夜，请重新输入日期")
 		return errBack
 	}
-	u.ok(fmt.Sprintf("已确定观测夜：%s（日出 %s 当天）", nights[0], f.sunriseDate))
+	if len(nights) == 1 {
+		u.ok(fmt.Sprintf("已确定观测夜：%s（日出 %s 当天）", nights[0], f.sunriseDate))
+	} else {
+		u.ok(fmt.Sprintf("已确定 %d 个观测夜：%s ~ %s",
+			len(nights), nights[0], nights[len(nights)-1]))
+	}
 
 	if warn := s.forecastRangeWarning(f); warn != "" {
 		u.warn(warn)
@@ -307,12 +321,17 @@ func (s *state) defaultDays() int {
 
 func (f reportForm) nights() []string {
 	if f.mode == "sunrise" {
-		sd, err := ValidateDate(f.sunriseDate)
+		dates, err := core.ParseSunriseDates(f.sunriseDate)
 		if err != nil {
 			return nil
 		}
-		// 观测夜 = 日出当天回拨一天（NightIDOf 口径）。
-		return []string{sd.AddDate(0, 0, -1).Format(dateLayout)}
+		// 每个日出当天对应一个观测夜（回拨一天，NightIDOf 口径），去重升序。
+		out := make([]string, 0, len(dates))
+		for _, d := range dates {
+			out = append(out, d.AddDate(0, 0, -1).Format(dateLayout))
+		}
+		sort.Strings(out)
+		return out
 	}
 	if f.usePeak {
 		peak, err := ValidateDate(f.peak)
