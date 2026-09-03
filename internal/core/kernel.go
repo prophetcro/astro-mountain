@@ -794,7 +794,7 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		res.Errors = append(res.Errors,
 			"所有点位均无有效数据。请检查：网络是否可达 api.open-meteo.com、"+
 				"日期是否在预报范围内、--models 是否拼写正确。")
-		e.emitSunriseReport(&res, p, outDir)
+		e.emitSunriseReport(&res, p, outDir, cfg)
 		res.ExitCode = 1
 		return res
 	}
@@ -826,17 +826,17 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		if w == nil {
 			w = os.Stdout
 		}
-		report.PrintSunriseReport(w, res.Sunrise, meta, e.Cfg)
+		report.PrintSunriseReport(w, res.Sunrise, meta, cfg)
 	}
 
-	e.emitSunriseReport(&res, p, outDir)
+	e.emitSunriseReport(&res, p, outDir, cfg)
 	res.ExitCode = 0
 	return res
 }
 
 // emitSunriseReport 生成日出模式 Markdown 报告并把路径写回 res。
 // 与流星雨报告 emitReport 等价，但调用 WriteSunriseMarkdownReport。
-func (e *Engine) emitSunriseReport(res *ExecResult, p RunParams, outDir string) {
+func (e *Engine) emitSunriseReport(res *ExecResult, p RunParams, outDir string, cfg config.Config) {
 	if p.NoReport {
 		e.logf("已指定 --no-report，跳过 Markdown 报告生成")
 		return
@@ -846,7 +846,7 @@ func (e *Engine) emitSunriseReport(res *ExecResult, p RunParams, outDir string) 
 			fmt.Sprintf("Markdown 报告生成失败：创建目录 %s 失败：%v", outDir, err))
 		return
 	}
-	path, err := report.WriteSunriseMarkdownReport(res.Sunrise, res.Meta, e.Cfg, outDir)
+	path, err := report.WriteSunriseMarkdownReport(res.Sunrise, res.Meta, cfg, outDir)
 	if err != nil {
 		res.Warnings = append(res.Warnings, "Markdown 报告生成失败："+err.Error())
 		return
