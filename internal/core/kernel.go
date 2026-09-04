@@ -785,12 +785,13 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		return res
 	}
 
-	// 日出模式不产出逐小时明细，也走不通抖音竖图（竖图按流星雨报告的章节名匹配）。
-	// 这两项被要点名跳过时如实告知，绝不能默默吞掉用户的 --csv/--json/--douyin。
-	if p.ExportCSV || p.ExportJSON || e.Cfg.Output.ExportCSV || e.Cfg.Output.ExportJSON {
+	// 日出模式不产出逐小时明细（CSV 是流星雨模式的逐夜逐时评级），但支持 --json 导出日出聚合结果；
+	// 抖音竖图按流星雨报告章节匹配，日出报告章节不同，暂不支持。被要点名跳过/不支持时如实告知，
+	// 绝不能默默吞掉用户的 --csv/--douyin。
+	if p.ExportCSV || e.Cfg.Output.ExportCSV {
 		res.Warnings = append(res.Warnings,
-			"日出模式不导出逐小时 CSV/JSON 明细（该明细是流星雨模式的逐夜逐时评级），"+
-				"本次仅产出 Markdown 报告")
+			"日出模式不导出逐小时 CSV 明细（该明细是流星雨模式的逐夜逐时评级）；"+
+				"如需量化数据请使用 --json 导出日出聚合结果。")
 	}
 	if p.Douyin {
 		res.Warnings = append(res.Warnings,
@@ -907,6 +908,24 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 	}
 
 	e.emitSunriseReport(&res, p, outDir, cfg)
+
+	// 日出模式 JSON 导出：与 Markdown 报告相互独立，即使 --no-report 也照常写出，
+	// 修复「选 JSON 又关报告 → 什么都没输出」的问题。
+	if p.ExportJSON || e.Cfg.Output.ExportJSON {
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			res.Warnings = append(res.Warnings,
+				fmt.Sprintf("JSON 导出失败：创建目录 %s 失败：%v", outDir, err))
+		} else {
+			path := filepath.Join(outDir, report.SunriseExportFilename(res.Sunrise, ".json"))
+			if err := report.ExportSunriseJSON(path, res.Sunrise, meta, cfg); err != nil {
+				res.Warnings = append(res.Warnings, "JSON 导出失败："+err.Error())
+			} else {
+				res.JSONPath = path
+				e.logf("已生成 JSON 结果：%s", path)
+			}
+		}
+	}
+
 	res.ExitCode = 0
 	return res
 }
