@@ -190,46 +190,24 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 		} else if multi {
 			for _, d := range order {
 				lines = append(lines, fmt.Sprintf("### %s", sunriseNightDate(d)), "")
-			sumRows := make([][]string, 0, len(byDate[d]))
-			for _, r := range byDate[d] {
-				sumRows = append(sumRows, []string{
-					r.Site,
-					fmt.Sprintf("%d", r.CloudSeaHours),
-					orDash(r.CloudSeaForm),
-					r.DawnGlow,
-					orDash(fogPotentialCell(r.FogPotential)),
-					r.Confidence,
-					r.ArriveBy.Format("15:04"),
-					r.Rating,
-				})
+				lines = append(lines, sunriseSummaryTable(byDate[d],
+					w.SunriseWindowBeforeMin, w.SunriseWindowAfterMin)...)
+				lines = append(lines, "")
+				if best := bestSunriseSite(byDate[d],
+					w.SunriseWindowBeforeMin, w.SunriseWindowAfterMin); best != "" {
+					lines = append(lines,
+						fmt.Sprintf("**综合推荐（该日出）**：%s（日出窗云海覆盖优先，其次朝霞强度与可信度）", best))
+				}
+				lines = append(lines, "")
 			}
-			lines = append(lines,
-				MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "近地雾", "云海可信度", "建议抵达", "结论"}, sumRows)...)
-			lines = append(lines, "")
-			if best := bestSunriseSite(byDate[d]); best != "" {
-				lines = append(lines, fmt.Sprintf("**综合推荐（该日出）**：%s（云海时长与可信度综合最优）", best))
-			}
-			lines = append(lines, "")
-		}
 	} else {
-		sumRows := make([][]string, 0, len(results))
-		for _, r := range results {
-			sumRows = append(sumRows, []string{
-				r.Site,
-				fmt.Sprintf("%d", r.CloudSeaHours),
-				orDash(r.CloudSeaForm),
-				r.DawnGlow,
-				orDash(fogPotentialCell(r.FogPotential)),
-				r.Confidence,
-				r.ArriveBy.Format("15:04"),
-				r.Rating,
-			})
-		}
-		lines = append(lines,
-			MDTable([]string{"点位", "云海时长h", "云海形态", "朝霞", "近地雾", "云海可信度", "建议抵达", "结论"}, sumRows)...)
+		lines = append(lines, sunriseSummaryTable(results,
+			w.SunriseWindowBeforeMin, w.SunriseWindowAfterMin)...)
 		lines = append(lines, "")
-		if best := bestSunriseSite(results); best != "" {
-			lines = append(lines, fmt.Sprintf("**综合推荐**：%s（云海时长与可信度综合最优）", best))
+		if best := bestSunriseSite(results,
+			w.SunriseWindowBeforeMin, w.SunriseWindowAfterMin); best != "" {
+			lines = append(lines,
+				fmt.Sprintf("**综合推荐**：%s（日出窗云海覆盖优先，其次朝霞强度与可信度）", best))
 		}
 	}
 
@@ -316,7 +294,6 @@ func fogPotentialCell(level string) string {
 // 多日模式按「站点」分节（每个站点下逐日列出），与 Markdown 报告一致；
 // 末尾再逐日给出「综合推荐」，保留按天的口径。
 func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.ReportMeta, cfg config.Config) {
-	_ = cfg
 	width := 56
 	line := Repeat("=", width)
 	dash := Repeat("-", width)
@@ -350,13 +327,15 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 			}
 		}
 		for _, d := range order {
-			if best := bestSunriseSite(byDate[d]); best != "" {
+			if best := bestSunriseSite(byDate[d],
+				cfg.Window.SunriseWindowBeforeMin, cfg.Window.SunriseWindowAfterMin); best != "" {
 				fmt.Fprintf(w, "➜ 综合推荐(%s)：%s\n", d, best)
 			}
 		}
 	} else {
 		printSunriseSiteBlock(w, results)
-		if best := bestSunriseSite(results); best != "" {
+		if best := bestSunriseSite(results,
+			cfg.Window.SunriseWindowBeforeMin, cfg.Window.SunriseWindowAfterMin); best != "" {
 			fmt.Fprintf(w, "➜ 综合推荐：%s\n", best)
 		}
 	}
@@ -467,16 +446,6 @@ func confidenceRank(c string) int {
 	}
 }
 
-// bestSunriseSite 按「云海时长 × 10 + 可信度序」给出综合最优机位名。
-func bestSunriseSite(results []SunriseSiteResult) string {
-	best := ""
-	bestScore := -1
-	for _, r := range results {
-		score := r.CloudSeaHours*10 + confidenceRank(r.Confidence)
-		if score > bestScore {
-			bestScore = score
-			best = r.Site
-		}
-	}
-	return best
-}
+// bestSunriseSite 定义在 sunrise_window.go：排序口径为
+// 「日出窗云海档位 → 朝霞档 → 云海时长 → 云海可信度」，与汇总表新增的
+// 「云海时段 / 日出窗云海」两列同一套窗口参数（cfg.Window.SunriseWindow*Min）。
