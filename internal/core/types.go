@@ -87,6 +87,13 @@ type RunParams struct {
 	Models    string // 显式指定的预报模式；为空时按站点 Region 自动解析
 	Compare   bool   // 强制开启双模型交叉对比（与 config.api.cross_model 取或）
 	NoCompare bool   // 强制关闭双模型交叉对比（覆盖 config.api.cross_model）
+
+	// GlowPolicy 朝霞判定口径（仅日出模式生效）：
+	//   "" / "consensus" — 默认，多模型共识封顶（只降不升，抓 ICON 等单模型离群）
+	//   "loose"         — 信任主模型(ICON)与 ECMWF 这两个高分辨率 NWP，取二者最高档
+	//                     （任一报大烧即采纳），不施加多数模型封顶。
+	// 用于「想看最乐观估计」的场景，配合报告里的逐模型明细自行判断。
+	GlowPolicy string
 	SitesPath string // 点位配置文件路径；Sites 非空时忽略
 	Sites     []Site // 直接注入的点位，优先于 SitesPath，便于测试与菜单临时点位
 	NoCache   bool   // 禁用响应缓存，强制回源取数

@@ -54,7 +54,16 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	glowLow, glowMid, glowHigh := dawnGlowCloud(resp, sunrise)
 	primTier, primNote := assessDawnGlow(glowLow, glowMid, glowHigh)
 	primTier, primNote = degradeDawnGlowByAOD(primTier, primNote, glow.AOD)
-	finalTier, finalNote, _ := consensusDawnGlow(primTier, primNote, glow.Compare)
+
+	// 朝霞最终档位：默认走多模型共识封顶；--glow-policy loose 时改取
+	// 主模型(ICON)与 ECMWF 的最高档（任一报大烧即采纳），不施加多数封顶。
+	var finalTier, finalNote string
+	switch glow.GlowPolicy {
+	case "loose":
+		finalTier, finalNote = looseDawnGlow(primTier, glow.PrimaryModel, glow.Compare)
+	default: // "consensus" 或空
+		finalTier, finalNote, _ = consensusDawnGlow(primTier, primNote, glow.Compare)
+	}
 	res.DawnGlow, res.DawnGlowNote = finalTier, finalNote
 
 	// 分歧透明化：把主模型 + 各对比模型的原始档位都带上，决策权交给用户。
@@ -212,6 +221,9 @@ type DawnGlowContext struct {
 	AOD model.OptFloat
 	// Compare 是辅助模式名 -> 该模式算出的朝霞档位（已含 AOD 降级）；不含主模式。
 	Compare map[string]string
+	// GlowPolicy 朝霞判定口径：空/"consensus" 走多模型共识封顶；"loose" 走
+	// 主模型(ICON)与 ECMWF 取高（任一报大烧即采纳），不施加多数模型封顶。
+	GlowPolicy string
 }
 
 // dawnGlowTierRank 朝霞档位排序：无<小烧<中烧<大烧。
@@ -310,6 +322,28 @@ func consensusDawnGlow(primaryTier, primaryNote string, compare map[string]strin
 	note = fmt.Sprintf("%s；⚠️低可信度（模型分歧）：%d/%d 模式未达大烧，已按多数模型封顶为%s",
 		primaryNote, belowBig, n, final)
 	return final, note, true
+}
+
+// looseDawnGlow 宽松口径：信任主模型(ICON)与 ECMWF 这两个高分辨率 NWP，
+// 取二者最高档（任一报大烧即采纳），不施加多模型共识的多数封顶。
+//
+// 与 consensusDawnGlow 的「只降不升」相反，本函数是「取高」——用于用户想看
+// 最乐观估计、自行承担离群风险的场景。各输入档位已含 AOD 降级与结构护栏，
+// 因此宽松口径只去掉跨模型封顶，不会把物理上不可能的「厚阴天大烧」放宽出来。
+// compare 为空（单模型）时 best 恒等于主模型结论，与共识行为一致。
+func looseDawnGlow(primaryTier, primaryModel string, compare map[string]string) (string, string) {
+	best := primaryTier
+	bestModel := primaryModel
+	if t, ok := compare["ecmwf_ifs025"]; ok {
+		if dawnGlowTierRank(t) > dawnGlowTierRank(best) {
+			best = t
+			bestModel = "ecmwf_ifs025"
+		}
+	}
+	if bestModel == primaryModel {
+		return best, fmt.Sprintf("宽松口径（主%s 与 ECMWF 取高）：%s", primaryModel, best)
+	}
+	return best, fmt.Sprintf("宽松口径（主%s 与 ECMWF 取高）：ECMWF 判%s → %s", primaryModel, best, best)
 }
 
 // dawnGlowDivergenceLabel 生成分歧一句话描述，供报告透明化展示。

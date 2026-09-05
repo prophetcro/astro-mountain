@@ -131,3 +131,58 @@ func TestBuildSunriseReport_DawnGlowTransparency(t *testing.T) {
 		t.Errorf("单模型下 DawnGlowDivergence 应为空，实际 %q", res1.DawnGlowDivergence)
 	}
 }
+
+// TestLooseDawnGlow 直接锁死宽松口径策略函数：主模型(ICON)与 ECMWF 取高，
+// 任一报大烧即采纳；无 ECMWF（单模型）时退回主模型结论。
+func TestLooseDawnGlow(t *testing.T) {
+	// ICON=中烧, ECMWF=大烧 → 取高 大烧
+	if g, _ := looseDawnGlow("中烧", "icon_seamless", map[string]string{"ecmwf_ifs025": "大烧"}); g != "大烧" {
+		t.Fatalf("ECMWF 大烧应取高，实际 %q", g)
+	}
+	// ICON=大烧, ECMWF=无 → 保留主模型 大烧（不被压低）
+	if g, _ := looseDawnGlow("大烧", "icon_seamless", map[string]string{"ecmwf_ifs025": "无"}); g != "大烧" {
+		t.Fatalf("主模型大烧应保留，实际 %q", g)
+	}
+	// ICON=无, ECMWF=小烧 → 取高 小烧
+	if g, _ := looseDawnGlow("无", "icon_seamless", map[string]string{"ecmwf_ifs025": "小烧"}); g != "小烧" {
+		t.Fatalf("ECMWF 小烧应取高，实际 %q", g)
+	}
+	// 单模型（无 ecmwf）→ 退回主模型
+	if g, _ := looseDawnGlow("中烧", "icon_seamless", nil); g != "中烧" {
+		t.Fatalf("无对比应退回主模型，实际 %q", g)
+	}
+}
+
+// TestBuildSunriseReport_GlowPolicyLoose 锁死 --glow-policy loose 接线：
+// 同一份输入（主模型因低云 60% 判无，ECMWF 判大烧），共识模式封顶为无，
+// 但 loose 取主ICON与ECMWF最高档 → 大烧。证明 BuildSunriseReport 确实按
+// GlowPolicy 分支切换到 looseDawnGlow，而非一律走共识。
+func TestBuildSunriseReport_GlowPolicyLoose(t *testing.T) {
+	cfg := config.Default()
+	night := mergeNight
+	sunriseDate := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	resp := makeCloudSeaResp(t)
+
+	compare := map[string]string{
+		"gfs_seamless": "小烧",
+		"ecmwf_ifs025": "大烧",
+		"best_match":   "无",
+	}
+
+	// 共识模式：主模型低云 60% 判无，ECMWF 大烧被多数封顶 → 无
+	resC := BuildSunriseReport(mergeSite, resp, night, sunriseDate, cfg, 28800, 30,
+		DawnGlowContext{PrimaryModel: "icon_seamless", Compare: compare})
+	if resC.DawnGlow != "无" {
+		t.Fatalf("共识模式应封顶为无，实际 %q", resC.DawnGlow)
+	}
+
+	// loose 模式：取主ICON与ECMWF最高档 → 大烧
+	resL := BuildSunriseReport(mergeSite, resp, night, sunriseDate, cfg, 28800, 30,
+		DawnGlowContext{PrimaryModel: "icon_seamless", Compare: compare, GlowPolicy: "loose"})
+	if resL.DawnGlow != "大烧" {
+		t.Fatalf("loose 模式应取 ECMWF 大烧 → 大烧，实际 %q", resL.DawnGlow)
+	}
+	if !strings.Contains(resL.DawnGlowNote, "宽松口径") {
+		t.Errorf("loose 备注应标注宽松口径，实际 %q", resL.DawnGlowNote)
+	}
+}

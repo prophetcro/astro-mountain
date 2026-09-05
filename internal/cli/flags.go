@@ -52,6 +52,10 @@ type Options struct {
 	Compare      bool // 强制开启双模型交叉对比（覆盖配置默认）
 	NoCrossModel bool // 强制关闭双模型交叉对比（覆盖配置默认）
 
+	// GlowPolicy 朝霞判定口径：consensus(默认) | loose（主ICON与ECMWF取高）。
+	// 仅日出模式生效。
+	GlowPolicy string
+
 	OutDir     string
 	ExportCSV  bool
 	ExportJSON bool
@@ -96,6 +100,8 @@ func newFlagSet(o *Options) *flag.FlagSet {
 	fs.BoolVar(&o.NoCache, "no-cache", false, "禁用磁盘缓存")
 	fs.BoolVar(&o.Compare, "compare", false, "强制开启双模型交叉对比（ICON ↔ GFS），覆盖配置默认")
 	fs.BoolVar(&o.NoCrossModel, "no-cross-model", false, "强制关闭双模型交叉对比，仅用主模式单模型")
+	fs.StringVar(&o.GlowPolicy, "glow-policy", "consensus",
+		"朝霞判定口径（日出模式）：consensus=多模型共识封顶(默认) | loose=主ICON与ECMWF取高(任一报大烧即采纳)")
 
 	fs.StringVar(&o.OutDir, "out-dir", "", "产物输出目录")
 	fs.BoolVar(&o.ExportCSV, "csv", false, "导出 CSV")
@@ -152,6 +158,9 @@ func (o *Options) Validate() error {
 	if o.Menu && o.NoMenu {
 		return fmt.Errorf("--menu 与 --no-menu 不能同时使用：" +
 			"前者强制进交互菜单、后者强制直接执行，请只保留一个")
+	}
+	if o.GlowPolicy != "" && o.GlowPolicy != "consensus" && o.GlowPolicy != "loose" {
+		return fmt.Errorf("--glow-policy 仅支持 consensus(默认) 或 loose，当前 %q", o.GlowPolicy)
 	}
 	if o.Mode == "sunrise" {
 		// 日出模式复用流星雨同款范围语义（--sunrise-date + --days 或 --start/--end），
@@ -311,6 +320,7 @@ func (o *Options) BuildRunParams(cfg config.Config, stdout io.Writer) core.RunPa
 		Models:      o.Models,
 		Compare:     o.Compare,
 		NoCompare:   o.NoCrossModel,
+		GlowPolicy:  o.GlowPolicy,
 		SitesPath:   o.SitesPath,
 		NoCache:     o.NoCache,
 		OutDir:      o.OutDir,
