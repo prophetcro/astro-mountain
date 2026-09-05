@@ -56,6 +56,13 @@ type SunriseSiteResult struct {
 	DawnGlow     string // 朝霞四档：无 / 小烧 / 中烧 / 大烧
 	DawnGlowNote string
 
+	// DawnGlowModels 朝霞「逐模型判定明细」（含主模型），用于分歧透明化：
+	// 把每个模型各自算出的朝霞档位摊开，决策权交还用户，而非只看共识封顶后的结论。
+	// 仅共识模式（多模型）下填充；单模型 / --no-cross-model 下为空。
+	DawnGlowModels []DawnGlowModelVerdict `json:"dawn_glow_models,omitempty"`
+	// DawnGlowDivergence 分歧一句话描述，如「模型一致：无」或「模型分歧：仅 1/4 判大烧」。
+	DawnGlowDivergence string `json:"dawn_glow_divergence,omitempty"`
+
 	// FogPotential 近地体积雾（辐射雾）可能档位：强 / 中 / 弱 / 无。
 	// 取值来自 profile.FOG_*，是**正面信号**——对云海/朝霞摄影来说贴地雾本身
 	// 就是拍摄主体（不是观星模式里那个「起雾=不宜」的否决项），
@@ -70,4 +77,12 @@ type SunriseSiteResult struct {
 	ConfidenceNote string
 
 	Rating string // 一句话结论（✅/⚠️/🔴 前缀）
+}
+
+// DawnGlowModelVerdict 单模型对朝霞的判定，透明化展示用。
+// Model 为模型标识（如 icon_seamless / gfs_seamless）；Primary 标记是否主模型（默认 ICON）。
+type DawnGlowModelVerdict struct {
+	Model   string `json:"model"`
+	Tier    string `json:"tier"`
+	Primary bool   `json:"primary"`
 }

@@ -908,8 +908,8 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 				t, _ = degradeDawnGlowByAOD(t, "", aod)
 				compareTiers[m] = t
 			}
-			r := BuildSunriseReport(site, resp, pr.night, pr.date, cfg, resp.UTCOffsetSeconds, arriveBufferMin,
-				DawnGlowContext{AOD: aod, Compare: compareTiers})
+		r := BuildSunriseReport(site, resp, pr.night, pr.date, cfg, resp.UTCOffsetSeconds, arriveBufferMin,
+			DawnGlowContext{AOD: aod, Compare: compareTiers, PrimaryModel: siteModels})
 			res.Sunrise = append(res.Sunrise, r)
 			e.logf("[%s][%s] 日出模式聚合：云海 %dh / 云海形态[%s] / 朝霞 %s / 云海可信度 %s",
 				site.Name, pr.date.Format(DateLayout), r.CloudSeaHours, r.CloudSeaForm, r.DawnGlow, r.Confidence)

@@ -57,6 +57,22 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	finalTier, finalNote, _ := consensusDawnGlow(primTier, primNote, glow.Compare)
 	res.DawnGlow, res.DawnGlowNote = finalTier, finalNote
 
+	// 分歧透明化：把主模型 + 各对比模型的原始档位都带上，决策权交给用户。
+	// 仅当真的有多模型输入时才填，单模型（DawnGlowContext{}）保持为空，回归安全。
+	if glow.PrimaryModel != "" || len(glow.Compare) > 0 {
+		bd := make([]report.DawnGlowModelVerdict, 0, len(glow.Compare)+1)
+		if glow.PrimaryModel != "" {
+			bd = append(bd, report.DawnGlowModelVerdict{
+				Model: glow.PrimaryModel, Tier: primTier, Primary: true,
+			})
+		}
+		for m, t := range glow.Compare {
+			bd = append(bd, report.DawnGlowModelVerdict{Model: m, Tier: t})
+		}
+		res.DawnGlowModels = bd
+		res.DawnGlowDivergence = dawnGlowDivergenceLabel(primTier, glow.Compare)
+	}
+
 	// 近地体积雾：日出拍摄窗口内逐时判定，取最强的一档。
 	// 这是独立于云海判定的正面信号——近地雾是贴地现象，与「脚下有没有云海」
 	// 由两套完全不同的判据给出（云海看气压层廓线几何，近地雾看地面要素），
@@ -189,6 +205,9 @@ var glowCompareModels = []string{"gfs_seamless", "ecmwf_ifs025", "best_match"}
 // DawnGlowContext 携带朝霞评估所需的辅助数据：AOD 与多模型共识输入。
 // 单模型运行（无对比 / --no-cross-model）下可留空，退化为原单模型口径（回归安全）。
 type DawnGlowContext struct {
+	// PrimaryModel 是主模型标识（默认 icon_seamless，按 region 可能解析为 jma_msm 等），
+	// 仅用于「分歧透明化」展示时给主模型打 (主) 标记；不参与判定逻辑。
+	PrimaryModel string
 	// AOD 是日出时刻的 CAMS 气溶胶光学厚度；Invalid 表示未取到（不降级）。
 	AOD model.OptFloat
 	// Compare 是辅助模式名 -> 该模式算出的朝霞档位（已含 AOD 降级）；不含主模式。
@@ -291,6 +310,37 @@ func consensusDawnGlow(primaryTier, primaryNote string, compare map[string]strin
 	note = fmt.Sprintf("%s；⚠️低可信度（模型分歧）：%d/%d 模式未达大烧，已按多数模型封顶为%s",
 		primaryNote, belowBig, n, final)
 	return final, note, true
+}
+
+// dawnGlowDivergenceLabel 生成分歧一句话描述，供报告透明化展示。
+// 全部一致时返回「模型一致：X」；出现分歧时返回「模型分歧：仅 k/n 判最高档」，
+// 让用户一眼判断当前结论是否被多数模型支撑（而非只看共识封顶后的单一档位）。
+func dawnGlowDivergenceLabel(primary string, compare map[string]string) string {
+	if len(compare) == 0 {
+		return "单模型（无交叉验证）"
+	}
+	parts := make([]string, 0, len(compare)+1)
+	parts = append(parts, primary)
+	for _, t := range compare {
+		parts = append(parts, t)
+	}
+	uniq := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		uniq[p] = struct{}{}
+	}
+	if len(uniq) == 1 {
+		return fmt.Sprintf("模型一致：%s", primary)
+	}
+	maxRank, maxCount := 0, 0
+	for _, p := range parts {
+		switch r := dawnGlowTierRank(p); {
+		case r > maxRank:
+			maxRank, maxCount = r, 1
+		case r == maxRank:
+			maxCount++
+		}
+	}
+	return fmt.Sprintf("模型分歧：仅 %d/%d 判%s", maxCount, len(parts), dawnGlowTierName(maxRank))
 }
 
 // assessDawnGroundFog 聚合「日出拍摄窗口」内的近地体积雾档位，取最强的一档。

@@ -3,7 +3,9 @@ package core
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/model"
 )
 
@@ -88,5 +90,44 @@ func TestConsensusDawnGlow_MajorityNoCapsBig(t *testing.T) {
 	final, _, divergent := consensusDawnGlow("大烧", "x", compare)
 	if final != "无" || !divergent {
 		t.Fatalf("2/4 大烧未达多数应封顶无，实际 final=%q divergent=%v", final, divergent)
+	}
+}
+
+// TestBuildSunriseReport_DawnGlowTransparency 验证「分歧透明化」：
+// 共识模式(多模型)下，报告须把主模型 + 各对比模型的原始档位都摊开到 DawnGlowModels，
+// 并给出分歧描述；单模型(DawnGlowContext{})下两者为空，保证回归安全。
+func TestBuildSunriseReport_DawnGlowTransparency(t *testing.T) {
+	cfg := config.Default()
+	night := mergeNight
+	sunriseDate := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	resp := makeCloudSeaResp(t)
+
+	// 多模型：主模型大烧，对比模型 小烧/无/无（绩溪式离群）
+	ctx := DawnGlowContext{
+		PrimaryModel: "icon_seamless",
+		Compare: map[string]string{
+			"gfs_seamless": "小烧",
+			"ecmwf_ifs025": "无",
+			"best_match":   "无",
+		},
+	}
+	res := BuildSunriseReport(mergeSite, resp, night, sunriseDate, cfg, 28800, 30, ctx)
+	if len(res.DawnGlowModels) != 4 {
+		t.Fatalf("DawnGlowModels 应有 4 条（主+3对比），实际 %d: %+v", len(res.DawnGlowModels), res.DawnGlowModels)
+	}
+	if !res.DawnGlowModels[0].Primary || res.DawnGlowModels[0].Model != "icon_seamless" {
+		t.Errorf("首条应为带 Primary 标记的主模型，实际 %+v", res.DawnGlowModels[0])
+	}
+	if res.DawnGlowDivergence == "" || !strings.Contains(res.DawnGlowDivergence, "分歧") {
+		t.Errorf("多模型下应给出含「分歧」的描述，实际 %q", res.DawnGlowDivergence)
+	}
+
+	// 单模型回归安全：不填充明细
+	res1 := BuildSunriseReport(mergeSite, resp, night, sunriseDate, cfg, 28800, 30, DawnGlowContext{})
+	if len(res1.DawnGlowModels) != 0 {
+		t.Errorf("单模型下 DawnGlowModels 应为空，实际 %d", len(res1.DawnGlowModels))
+	}
+	if res1.DawnGlowDivergence != "" {
+		t.Errorf("单模型下 DawnGlowDivergence 应为空，实际 %q", res1.DawnGlowDivergence)
 	}
 }

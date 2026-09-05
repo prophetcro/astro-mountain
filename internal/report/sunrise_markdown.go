@@ -262,6 +262,21 @@ func sunriseSiteDayBody(r SunriseSiteResult) []string {
 	}
 	out = append(out,
 		fmt.Sprintf("**朝霞强度**：%s — %s", r.DawnGlow, r.DawnGlowNote), "")
+	// 分歧透明化：逐模型摊开主模型 + 各对比模型的原始档位，决策权交还用户。
+	if len(r.DawnGlowModels) > 0 {
+		ms := make([]string, 0, len(r.DawnGlowModels))
+		for _, m := range r.DawnGlowModels {
+			tag := ""
+			if m.Primary {
+				tag = "(主)"
+			}
+			ms = append(ms, fmt.Sprintf("%s%s=%s", m.Model, tag, m.Tier))
+		}
+		out = append(out, fmt.Sprintf("**朝霞逐模型**：%s", strings.Join(ms, "，")), "")
+		if r.DawnGlowDivergence != "" {
+			out = append(out, fmt.Sprintf("**朝霞分歧**：%s", r.DawnGlowDivergence), "")
+		}
+	}
 	// 近地雾是正面信号：即便「无云海 + 大烧朝霞」，现场也可能有可拍的贴地雾。
 	// 档位为「无」或空值时整行跳过，与 CloudSeaForm 空值跳过的处理一致。
 	if fogPotentialShown(r.FogPotential) {
@@ -365,6 +380,20 @@ func printSunriseSiteDay(w io.Writer, r SunriseSiteResult) {
 		fmt.Fprintf(w, "  云海形态：%s\n", r.CloudSeaForm)
 	}
 	fmt.Fprintf(w, "  朝霞：%s\n", r.DawnGlow)
+	if len(r.DawnGlowModels) > 0 {
+		ms := make([]string, 0, len(r.DawnGlowModels))
+		for _, m := range r.DawnGlowModels {
+			tag := ""
+			if m.Primary {
+				tag = "(主)"
+			}
+			ms = append(ms, fmt.Sprintf("%s%s=%s", m.Model, tag, m.Tier))
+		}
+		fmt.Fprintf(w, "  朝霞逐模型：%s\n", strings.Join(ms, "，"))
+		if r.DawnGlowDivergence != "" {
+			fmt.Fprintf(w, "  朝霞分歧：%s\n", r.DawnGlowDivergence)
+		}
+	}
 	// 近地雾与朝霞并列展示：无云海时它可能是唯一可拍的题材。档位「无」不打印。
 	if fogPotentialShown(r.FogPotential) {
 		fmt.Fprintf(w, "  近地雾：%s\n", r.FogPotential)
@@ -397,6 +426,20 @@ func printSunriseSiteBlock(w io.Writer, results []SunriseSiteResult) {
 			fmt.Fprintf(w, "  云海形态：%s\n", r.CloudSeaForm)
 		}
 		fmt.Fprintf(w, "  朝霞：%s\n", r.DawnGlow)
+		if len(r.DawnGlowModels) > 0 {
+			ms := make([]string, 0, len(r.DawnGlowModels))
+			for _, m := range r.DawnGlowModels {
+				tag := ""
+				if m.Primary {
+					tag = "(主)"
+				}
+				ms = append(ms, fmt.Sprintf("%s%s=%s", m.Model, tag, m.Tier))
+			}
+			fmt.Fprintf(w, "  朝霞逐模型：%s\n", strings.Join(ms, "，"))
+			if r.DawnGlowDivergence != "" {
+				fmt.Fprintf(w, "  朝霞分歧：%s\n", r.DawnGlowDivergence)
+			}
+		}
 		if fogPotentialShown(r.FogPotential) {
 			fmt.Fprintf(w, "  近地雾：%s\n", r.FogPotential)
 		}
