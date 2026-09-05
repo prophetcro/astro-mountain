@@ -19,6 +19,11 @@ var subcommands = []subcommand{
 		Brief: "打印地表分层云量与气压层剖面的逐时对照，核实「剖面之上有云」兜底判据",
 		Run:   runCloud,
 	},
+	{
+		Name:  "glow-data",
+		Brief: "单点日出/日落时刻逐 NWP 模型云量对照，定位「bot 大烧 vs 火烧云不烧」分歧",
+		Run:   runGlowData,
+	},
 }
 
 func usage(w *os.File) {
