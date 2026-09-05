@@ -1028,6 +1028,32 @@ func (s *state) printExecResult(res core.ExecResult) {
 		u.printf("   数据   %d 个夜间时次，其中 %d 个有有效预报\n", n, valid)
 	}
 
+	// 日出模式：把逐站点结论（含朝霞「逐模型分歧」）直接摊在交互屏里，
+	// 不再只写文件、让用户回去看报告才知道每个模型怎么判。
+	if n := len(res.Sunrise); n > 0 {
+		u.blank()
+		u.println("   日出逐站点 · 朝霞分歧")
+		for _, r := range res.Sunrise {
+			u.printf("   %s：朝霞 %s\n", r.Site, r.DawnGlow)
+			if len(r.DawnGlowModels) > 0 {
+				var parts []string
+				for _, m := range r.DawnGlowModels {
+					label := m.Model
+					if m.Primary {
+						label = m.Model + "(主)"
+					}
+					parts = append(parts, label+"="+m.Tier)
+				}
+				u.printf("     逐模型：%s\n", strings.Join(parts, "，"))
+				if r.DawnGlowDivergence != "" {
+					u.printf("     分歧：%s\n", r.DawnGlowDivergence)
+				}
+			} else if r.DawnGlowNote != "" {
+				u.printf("     说明：%s\n", r.DawnGlowNote)
+			}
+		}
+	}
+
 	if len(res.Warnings) > 0 {
 		u.blank()
 		u.printf("  ⚠ %d 条警告（不影响已生成的产物）：\n", len(res.Warnings))
