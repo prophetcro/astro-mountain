@@ -29,9 +29,12 @@ const maxBodyBytes = 8 << 20
 type Client struct {
 	HTTP     *http.Client
 	Endpoint string
-	Models   string
-	Timezone string
-	Cache    *Cache
+	// AirQualityEndpoint 是 CAMS 气溶胶光学厚度数据源（空气质量 API），
+	// 与预报端点分离；空值回落到内置默认 AirQualityEndpoint。
+	AirQualityEndpoint string
+	Models             string
+	Timezone           string
+	Cache              *Cache
 
 	Retries       int
 	BackoffFactor float64
@@ -53,6 +56,11 @@ func WithHTTPClient(h *http.Client) Option {
 // WithEndpoint 覆盖 API 端点地址。
 func WithEndpoint(endpoint string) Option {
 	return func(c *Client) { c.Endpoint = endpoint }
+}
+
+// WithAirQualityEndpoint 覆盖 CAMS 气溶胶光学厚度（空气质量）API 端点地址，供测试打桩。
+func WithAirQualityEndpoint(endpoint string) Option {
+	return func(c *Client) { c.AirQualityEndpoint = endpoint }
 }
 
 // WithCache 替换缓存实现。
@@ -90,6 +98,9 @@ func New(cfg config.APIConfig, useCache bool, opts ...Option) *Client {
 	}
 	if c.Endpoint == "" {
 		c.Endpoint = "https://api.open-meteo.com/v1/forecast"
+	}
+	if c.AirQualityEndpoint == "" {
+		c.AirQualityEndpoint = AirQualityEndpoint
 	}
 	if c.Timezone == "" {
 		c.Timezone = "Asia/Shanghai"

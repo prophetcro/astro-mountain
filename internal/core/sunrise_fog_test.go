@@ -56,7 +56,7 @@ func TestSunriseGroundFog_Wiring(t *testing.T) {
 	resp := makeCloudSeaResp(t)
 	setFogSurface(resp, 97, 15.5, 14, 2.5, 0, false) // 能见度缺测 + 强代理
 
-	res := BuildSunriseReport(mergeSite, resp, night, sunriseDate, cfg, 28800, 30)
+	res := BuildSunriseReport(mergeSite, resp, night, sunriseDate, cfg, 28800, 30, DawnGlowContext{})
 	if res.FogPotential != profile.FOG_STRONG {
 		t.Fatalf("FogPotential=%q，期望 %q", res.FogPotential, profile.FOG_STRONG)
 	}
@@ -82,8 +82,8 @@ func TestSunriseGroundFog_DoesNotTouchCloudSeaVerdict(t *testing.T) {
 	none := makeCloudSeaResp(t)
 	setFogSurface(none, 40, 25, 10, 2.5, 0, false) // 无雾、能见度缺测
 
-	rS := BuildSunriseReport(mergeSite, strong, night, sunriseDate, cfg, 28800, 30)
-	rN := BuildSunriseReport(mergeSite, none, night, sunriseDate, cfg, 28800, 30)
+	rS := BuildSunriseReport(mergeSite, strong, night, sunriseDate, cfg, 28800, 30, DawnGlowContext{})
+	rN := BuildSunriseReport(mergeSite, none, night, sunriseDate, cfg, 28800, 30, DawnGlowContext{})
 
 	if rS.CloudSeaHours != rN.CloudSeaHours {
 		t.Errorf("云海时长被雾改动：强雾=%d 无雾=%d", rS.CloudSeaHours, rN.CloudSeaHours)

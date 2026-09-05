@@ -25,7 +25,8 @@ import (
 // 输出 report.SunriseSiteResult（云海时段 / 云海形态 / 朝霞四档 / 建议抵达时间 / 云海可信度五档）。
 // 注意：类型定义在 report 包，避免 report 反向依赖 core 形成循环引用。
 func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
-	sunriseDate time.Time, cfg config.Config, utcOffsetSec int, arriveBufferMin int) report.SunriseSiteResult {
+	sunriseDate time.Time, cfg config.Config, utcOffsetSec int, arriveBufferMin int,
+	glow DawnGlowContext) report.SunriseSiteResult {
 
 	res := report.SunriseSiteResult{Site: site.Name, SunriseDate: sunriseDate.Format(DateLayout)}
 
@@ -49,8 +50,12 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	res.CloudSeaForm = cloudSeaFormOf(eps)
 
 	// 朝霞：取离日出时刻最近的整点云量评估（±40min 内），缺测则兜底全夜最大中高云量。
+	// 主模式先按云量给档位，再用 AOD 降级，最后与多模型共识对齐（抓单模型离群）。
 	glowLow, glowMid, glowHigh := dawnGlowCloud(resp, sunrise)
-	res.DawnGlow, res.DawnGlowNote = assessDawnGlow(glowLow, glowMid, glowHigh)
+	primTier, primNote := assessDawnGlow(glowLow, glowMid, glowHigh)
+	primTier, primNote = degradeDawnGlowByAOD(primTier, primNote, glow.AOD)
+	finalTier, finalNote, _ := consensusDawnGlow(primTier, primNote, glow.Compare)
+	res.DawnGlow, res.DawnGlowNote = finalTier, finalNote
 
 	// 近地体积雾：日出拍摄窗口内逐时判定，取最强的一档。
 	// 这是独立于云海判定的正面信号——近地雾是贴地现象，与「脚下有没有云海」
@@ -142,8 +147,12 @@ func absMinutes(d time.Duration) int64 {
 	return m
 }
 
-// assessDawnGlow 据中高云量与低云遮挡判朝霞四档。
+// assessDawnGlow 据中高云量与低云遮挡判朝霞四档（纯云量口径，不含 AOD）。
 // 朝霞需要：中高云（被日出染红）且低空通透（无厚云压顶遮挡日出处）。
+//
+// 结构护栏：中高云接近满云（>=90%）通常是不可染的厚云层而非可染薄云，封顶中烧——
+// 它改变了原「midhigh>=40 即大烧」的盲目乐观，但并不触碰「aod 缺失且 midhigh<90」
+// 的回归区间（该区间输出与原版逐字节一致，见 TestAssessDawnGlow）。
 func assessDawnGlow(low, mid, high float64) (string, string) {
 	if low >= 60 {
 		return "无", fmt.Sprintf("低云量 %.0f%% 偏高，日出处被遮挡，朝霞难现", low)
@@ -152,16 +161,136 @@ func assessDawnGlow(low, mid, high float64) (string, string) {
 	if high > midhigh {
 		midhigh = high
 	}
-	switch {
-	case midhigh >= 40:
-		return "大烧", fmt.Sprintf("中高云量 %.0f%% 适中，日出处有云可染红，朝霞条件佳", midhigh)
-	case midhigh >= 20:
-		return "中烧", fmt.Sprintf("中高云量 %.0f%%，朝霞中等", midhigh)
-	case midhigh >= 5:
-		return "小烧", fmt.Sprintf("仅薄高云 %.0f%%，朝霞微弱", midhigh)
-	default:
+	if midhigh < 5 {
 		return "无", "无中高云载体，晴天无朝霞（或全低云压顶）"
 	}
+	var tier, note string
+	switch {
+	case midhigh >= 40:
+		tier, note = "大烧", fmt.Sprintf("中高云量 %.0f%% 适中，日出处有云可染红，朝霞条件佳", midhigh)
+	case midhigh >= 20:
+		tier, note = "中烧", fmt.Sprintf("中高云量 %.0f%%，朝霞中等", midhigh)
+	default: // >=5
+		tier, note = "小烧", fmt.Sprintf("仅薄高云 %.0f%%，朝霞微弱", midhigh)
+	}
+	// 结构护栏：满云封顶中烧。
+	if midhigh >= 90 && tier == "大烧" {
+		tier = "中烧"
+		note = fmt.Sprintf("中高云量 %.0f%% 过饱和（厚云层），朝霞封顶中烧", midhigh)
+	}
+	return tier, note
+}
+
+// glowCompareModels 是朝霞多模型共识用于交叉验证的辅助模式（不含主模式）。
+// 与 mcpdiag glow-data 的默认四模型口径一致，覆盖 GFS/ECMWF/最佳融合，
+// 专门用来抓「主模式（默认 ICON）系统性高估中层云」这类离群。
+var glowCompareModels = []string{"gfs_seamless", "ecmwf_ifs025", "best_match"}
+
+// DawnGlowContext 携带朝霞评估所需的辅助数据：AOD 与多模型共识输入。
+// 单模型运行（无对比 / --no-cross-model）下可留空，退化为原单模型口径（回归安全）。
+type DawnGlowContext struct {
+	// AOD 是日出时刻的 CAMS 气溶胶光学厚度；Invalid 表示未取到（不降级）。
+	AOD model.OptFloat
+	// Compare 是辅助模式名 -> 该模式算出的朝霞档位（已含 AOD 降级）；不含主模式。
+	Compare map[string]string
+}
+
+// dawnGlowTierRank 朝霞档位排序：无<小烧<中烧<大烧。
+func dawnGlowTierRank(tier string) int {
+	switch tier {
+	case "小烧":
+		return 1
+	case "中烧":
+		return 2
+	case "大烧":
+		return 3
+	}
+	return 0 // 无 / 未知
+}
+
+func dawnGlowTierName(rank int) string {
+	switch rank {
+	case 1:
+		return "小烧"
+	case 2:
+		return "中烧"
+	case 3:
+		return "大烧"
+	}
+	return "无"
+}
+
+// degradeDawnGlowByAOD 据气溶胶光学厚度对朝霞档位做降级。
+// AOD 过高时天空发灰、散射吞掉鲜艳度，不应报大烧。AOD 缺失则不降级（沿用原档位）。
+func degradeDawnGlowByAOD(tier, note string, aod model.OptFloat) (string, string) {
+	if !aod.Valid {
+		return tier, note
+	}
+	switch {
+	case aod.V >= 1.0:
+		return "无", fmt.Sprintf("气溶胶 AOD %.2f 过高，天空浑浊，朝霞难现", aod.V)
+	case aod.V >= 0.6:
+		if dawnGlowTierRank(tier) > 1 {
+			return "小烧", fmt.Sprintf("中高云可用，但 AOD %.2f 偏高、天空发灰，朝霞封顶小烧", aod.V)
+		}
+	case aod.V >= 0.3:
+		if dawnGlowTierRank(tier) > 2 {
+			return "中烧", fmt.Sprintf("中高云可用，但 AOD %.2f 偏高，朝霞封顶中烧", aod.V)
+		}
+	}
+	return tier, note
+}
+
+// consensusDawnGlow 多模型共识：当多数模式与单一模式结论冲突时，以多数模式为准（封顶），
+// 避免单个模式的系统性离群（如 ICON 对中层云的高估）把「不烧」误报成「大烧」。
+//
+// compare 不含主模式；为空表示单模型，直接返回主模式结论（回归安全）。
+// 本函数只降不升：若多数模式比主模式更高（主模式偏保守），保留主模式结论，
+// 以「不谎报大烧」为第一优先级。返回 final 档位、note、是否发生分歧降级。
+func consensusDawnGlow(primaryTier, primaryNote string, compare map[string]string) (final, note string, divergent bool) {
+	if len(compare) == 0 {
+		return primaryTier, primaryNote, false
+	}
+	all := make([]int, 0, len(compare)+1)
+	all = append(all, dawnGlowTierRank(primaryTier))
+	for _, t := range compare {
+		all = append(all, dawnGlowTierRank(t))
+	}
+	n := len(all)
+	majority := n/2 + 1
+
+	// 共识档位 = 满足「≥该档位的模式数不少于多数」的最高档位。
+	consensusRank := 0
+	for rank := 3; rank >= 0; rank-- {
+		cnt := 0
+		for _, r := range all {
+			if r >= rank {
+				cnt++
+			}
+		}
+		if cnt >= majority {
+			consensusRank = rank
+			break
+		}
+	}
+
+	primRank := dawnGlowTierRank(primaryTier)
+	if primRank <= consensusRank {
+		// 主模式未高于共识：无需封顶（本函数只降不升，保持诚实保守）。
+		return primaryTier, primaryNote, false
+	}
+
+	// 主模式高于共识：封顶到共识档位，并标注分歧。
+	final = dawnGlowTierName(consensusRank)
+	belowBig := 0
+	for _, r := range all {
+		if r < 3 {
+			belowBig++
+		}
+	}
+	note = fmt.Sprintf("%s；⚠️低可信度（模型分歧）：%d/%d 模式未达大烧，已按多数模型封顶为%s",
+		primaryNote, belowBig, n, final)
+	return final, note, true
 }
 
 // assessDawnGroundFog 聚合「日出拍摄窗口」内的近地体积雾档位，取最强的一档。

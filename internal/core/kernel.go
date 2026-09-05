@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/prophetcro/astro-mountain/internal/api"
+	"github.com/prophetcro/astro-mountain/internal/astro"
 	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/model"
 	"github.com/prophetcro/astro-mountain/internal/report"
@@ -860,8 +861,55 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		if utcOffsetHours != 0 {
 			repOffsetHours = utcOffsetHours
 		}
+
+		// 朝霞多模型共识 + AOD：默认开启，专门抓「主模式（默认 ICON）系统性高估中层云」
+		// 把「不烧」误报成「大烧」的离群；仅当 --no-cross-model 时退化为单模型。
+		// 取数失败不阻断主报告，只记警告（AOD/对比缺失时按单模型口径诚实降级）。
+		var aodMap map[time.Time]model.OptFloat
+		compareResps := make(map[string]*api.Response)
+		if !p.NoCompare {
+			if am, aerr := client.FetchAOD(ctx, site, start, end); aerr != nil {
+				res.Warnings = append(res.Warnings,
+					fmt.Sprintf("[%s] AOD 取数失败（按缺失处理，不阻断主报告）：%v", site.Name, aerr))
+			} else {
+				aodMap = am
+			}
+			for _, m := range glowCompareModels {
+				if m == siteModels {
+					continue
+				}
+				cr, _, cerr := client.FetchSite(ctx, site, start, end, m)
+				if cerr != nil {
+					res.Warnings = append(res.Warnings,
+						fmt.Sprintf("[%s] 朝霞共识模式 %s 取数失败（不阻断主报告）：%v", site.Name, m, cerr))
+					continue
+				}
+				compareResps[m] = cr
+			}
+		}
+
 		for _, pr := range pairs {
-			r := BuildSunriseReport(site, resp, pr.night, pr.date, cfg, resp.UTCOffsetSeconds, arriveBufferMin)
+			// 日出时刻与 BuildSunriseReport 内部同口径计算，供 AOD 对齐与对比模式取云量。
+			sunrise, sok := astro.SunriseTime(site.Lat, site.Lon, resp.UTCOffsetSeconds, pr.date)
+			if !sok {
+				loc := time.FixedZone("local", resp.UTCOffsetSeconds)
+				sunrise = time.Date(pr.date.Year(), pr.date.Month(), pr.date.Day(), 6, 30, 0, 0, loc)
+			}
+			aod := model.Missing()
+			if aodMap != nil {
+				if v, ok := aodMap[wallClockUTC(sunrise)]; ok {
+					aod = v
+				}
+			}
+			compareTiers := make(map[string]string, len(compareResps))
+			for m, cr := range compareResps {
+				cl, cm, ch := dawnGlowCloud(cr, sunrise)
+				t, _ := assessDawnGlow(cl, cm, ch)
+				t, _ = degradeDawnGlowByAOD(t, "", aod)
+				compareTiers[m] = t
+			}
+			r := BuildSunriseReport(site, resp, pr.night, pr.date, cfg, resp.UTCOffsetSeconds, arriveBufferMin,
+				DawnGlowContext{AOD: aod, Compare: compareTiers})
 			res.Sunrise = append(res.Sunrise, r)
 			e.logf("[%s][%s] 日出模式聚合：云海 %dh / 云海形态[%s] / 朝霞 %s / 云海可信度 %s",
 				site.Name, pr.date.Format(DateLayout), r.CloudSeaHours, r.CloudSeaForm, r.DawnGlow, r.Confidence)

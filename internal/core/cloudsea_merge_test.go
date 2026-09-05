@@ -234,13 +234,13 @@ func TestCloudSeaMerge_DownstreamConfidence(t *testing.T) {
 	sunriseDate := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
 
 	base := makeCloudSeaResp(t)
-	r0 := BuildSunriseReport(mergeSite, base, mergeNight, sunriseDate, cfg, 28800, 30)
+	r0 := BuildSunriseReport(mergeSite, base, mergeNight, sunriseDate, cfg, 28800, 30, DawnGlowContext{})
 	t.Logf("[下游·基线]  CloudSeaHours=%d 段数=%d → 可信度=%s（%s）",
 		r0.CloudSeaHours, len(r0.Episodes), r0.Confidence, r0.ConfidenceNote)
 
 	miss := makeCloudSeaResp(t)
 	blankLevelProfileAt(miss, 3)
-	r1 := BuildSunriseReport(mergeSite, miss, mergeNight, sunriseDate, cfg, 28800, 30)
+	r1 := BuildSunriseReport(mergeSite, miss, mergeNight, sunriseDate, cfg, 28800, 30, DawnGlowContext{})
 	t.Logf("[下游·缺测1h] CloudSeaHours=%d 段数=%d → 可信度=%s（%s）",
 		r1.CloudSeaHours, len(r1.Episodes), r1.Confidence, r1.ConfidenceNote)
 
