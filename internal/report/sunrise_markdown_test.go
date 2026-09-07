@@ -132,10 +132,10 @@ func TestSunriseConfidenceLabelIsPlain(t *testing.T) {
 }
 
 // TestSunriseReportMultiDateGrouping 锁死「日出模式加多日」的渲染分节：
-// 多个日出当天的结果必须按「站点」分节（### 站点名，其下以「前一天」(观测夜) 的干净单日期逐日列出），
-// 而非按日期分节——后者会把同一站点散落到多个日期标题下、在折叠重复锚点的预览器里只显第一天；
-// 逐日标题只用观测夜这一日期（如 2026-09-03），不堆「观测夜/日出当天」字样，日出时刻在正文里已有。
-// 元信息「日出当天」行仍显示天数区间，综合结论（第三节）保留按观测夜分节的逐日汇总表，
+// 多个日出当天的结果必须按「站点」分节（### 站点名，其下以「日出当天」逐日列出，标题带「日出」字样），
+// 而非按站点散落到多个日期标题下、在折叠重复锚点的预览器里只显第一天；
+// 逐日标题直接用日出当天这一日期（如 2026-09-04 日出），不再减一天标成观测夜。
+// 元信息「日出当天」行显示天数区间，综合结论（第三节）按日出当天分节给出逐日汇总表，
 // 且每个站点的云海可信度/形态标签仍正常渲染。
 func TestSunriseReportMultiDateGrouping(t *testing.T) {
 	meta := model.ReportMeta{
@@ -169,23 +169,23 @@ func TestSunriseReportMultiDateGrouping(t *testing.T) {
 
 	out := BuildSunriseMarkdownReport(results, meta, cfg)
 
-	// 按站点分节：同一站点只占一个 H3，其下逐日以「前一天」(观测夜) 的干净单日期标注。
+	// 按站点分节：同一站点只占一个 H3，其下逐日以「日出当天」标注（带「日出」字样）。
 	if !strings.Contains(out, "### 测试点") {
 		t.Errorf("报告应含按站点分节的「### 测试点」：\n%s", excerpt(out, "测试点"))
 	}
-	if !strings.Contains(out, "#### 2026-09-03") {
-		t.Errorf("按站点分节后，测试点下应含「#### 2026-09-03」（前一天/观测夜，干净单日期）：\n%s", excerpt(out, "2026-09-03"))
+	if !strings.Contains(out, "#### 2026-09-04 日出") {
+		t.Errorf("按站点分节后，测试点下应含「#### 2026-09-04 日出」：\n%s", excerpt(out, "2026-09-04"))
 	}
-	if !strings.Contains(out, "#### 2026-09-04") {
-		t.Errorf("按站点分节后，测试点下应含「#### 2026-09-04」：\n%s", excerpt(out, "2026-09-04"))
+	if !strings.Contains(out, "#### 2026-09-05 日出") {
+		t.Errorf("按站点分节后，测试点下应含「#### 2026-09-05 日出」：\n%s", excerpt(out, "2026-09-05"))
 	}
 	// 元信息仍显示天数区间。
 	if !strings.Contains(out, "2 天（2026-09-04 ~ 2026-09-05）") {
 		t.Errorf("元信息「日出当天」应显示 2 天区间：\n%s", excerpt(out, "日出当天"))
 	}
-	// 综合结论（第三节）仍按观测夜分节给出逐日汇总表。
-	if !strings.Contains(out, "### 2026-09-03") {
-		t.Errorf("综合结论仍应按观测夜分节含「### 2026-09-03」：\n%s", excerpt(out, "2026-09-03"))
+	// 综合结论（第三节）按日出当天分节给出逐日汇总表。
+	if !strings.Contains(out, "### 2026-09-04 日出") {
+		t.Errorf("综合结论应按日出当天分节含「### 2026-09-04 日出」：\n%s", excerpt(out, "2026-09-04"))
 	}
 	// 多日时每站点字段级标签仍必须正确渲染。
 	if !strings.Contains(out, "**云海可信度**：") {
@@ -198,6 +198,56 @@ func TestSunriseReportMultiDateGrouping(t *testing.T) {
 	fn := sunriseReportFilename(results)
 	if fn != "astro_report_sunrise-2026-09-04_2026-09-05.md" {
 		t.Errorf("多日文件名应为区间形式，实际 %q", fn)
+	}
+}
+
+// TestSunriseReportDateLabelUsesSunriseDayNotNight 锁死用户真实踩到的 off-by-one：
+// --sunrise-date 2026-09-12 --days 2 选的是「最晚日出当天 12 号、往前推 2 天」，
+// 即日出当天 09-10 / 09-11 / 09-12。报告小节标题必须用「日出当天」（带「日出」字样），
+// 绝不能减一天标成观测夜（09-09 / 09-10 / 09-11）——后者会让用户以为「选了 12 却只到 11」。
+// 元信息「日出当天」行显示 3 天区间；元信息不得再出现「观测夜」行（那是流星雨模式口径）。
+func TestSunriseReportDateLabelUsesSunriseDayNotNight(t *testing.T) {
+	meta := model.ReportMeta{
+		GeneratedAt:    "2026-09-12 09:00:00",
+		Models:         "icon_seamless",
+		Timezone:       "Asia/Shanghai",
+		UTCOffsetHours: 8,
+		// 内核按 sunriseDay-1 推导的观测夜，仅供取数区间，不应进入报告标题。
+		Nights: []string{"2026-09-09", "2026-09-10", "2026-09-11"},
+		Sites:  []model.Site{{Name: "测试点", Lat: 30, Lon: 120, Alt: 1000}},
+	}
+	cfg := config.Default()
+
+	mk := func(day string) SunriseSiteResult {
+		d, _ := time.Parse("2006-01-02", day)
+		return SunriseSiteResult{
+			Site: "测试点", SunriseDate: day,
+			SunriseTime: d.Add(5*time.Hour + 30*time.Minute), ArriveBy: d.Add(4 * time.Hour),
+			CloudSeaHours: 3, HasData: true, CloudSeaForm: "脚下型",
+			DawnGlow: "中烧", DawnGlowNote: "云顶高度适中",
+			Confidence: "中", ConfidenceNote: "云海检出 3 时次", Rating: "✅ 可蹲守",
+		}
+	}
+	results := []SunriseSiteResult{mk("2026-09-10"), mk("2026-09-11"), mk("2026-09-12")}
+
+	out := BuildSunriseMarkdownReport(results, meta, cfg)
+
+	// 末节（综合结论）必须含 09-12 日出当天，不得出现 09-09 这个 off-by-one 标题。
+	if !strings.Contains(out, "### 2026-09-12 日出") {
+		t.Errorf("报告应含末节「### 2026-09-12 日出」（用户选的 12 号必须可见）：\n%s", excerpt(out, "2026-09-1"))
+	}
+	for _, bad := range []string{"### 2026-09-09", "#### 2026-09-09", "2026-09-09 日出"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("报告不应出现观测夜 off-by-one 标题 %q：\n%s", bad, excerpt(out, "2026-09-09"))
+		}
+	}
+	// 元信息「日出当天」显示 3 天区间 09-10 ~ 09-12。
+	if !strings.Contains(out, "3 天（2026-09-10 ~ 2026-09-12）") {
+		t.Errorf("元信息「日出当天」应显示 3 天区间 09-10 ~ 09-12：\n%s", excerpt(out, "日出当天"))
+	}
+	// 元信息不得再暴露流星雨模式的「观测夜」行。
+	if strings.Contains(out, "| 观测夜 |") {
+		t.Errorf("日出模式元信息不应再含「观测夜」行：\n%s", excerpt(out, "观测夜"))
 	}
 }
 

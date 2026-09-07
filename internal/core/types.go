@@ -89,11 +89,17 @@ type RunParams struct {
 	NoCompare bool   // 强制关闭双模型交叉对比（覆盖 config.api.cross_model）
 
 	// GlowPolicy 朝霞判定口径（仅日出模式生效）：
-	//   "" / "consensus" — 默认，多模型共识封顶（只降不升，抓 ICON 等单模型离群）
+	//   "" / "sunset"   — 默认，sunsetbot 口径：以 GFS/ECMWF 两个基准模型取低（任一方判无即无），
+	//                     彻底排除 ICON 系统性高估中层云的离群（不抬高也不压低主模型）。
+	//   "consensus"     — 多模型共识封顶（只降不升，抓 ICON 等单模型离群）。
 	//   "loose"         — 信任主模型(ICON)与 ECMWF 这两个高分辨率 NWP，取二者最高档
 	//                     （任一报大烧即采纳），不施加多数模型封顶。
 	// 用于「想看最乐观估计」的场景，配合报告里的逐模型明细自行判断。
 	GlowPolicy string
+	// GlowCrossSection 开启「大气截面几何判定」（对齐 sunsetbot 的 800km 截面 +
+	// AOD 等效云底 + 几何可达性）。开启后会沿太阳方位角多点取数（GFS 云廓线 + CAMS AOD），
+	// 取数成本高，默认关闭；仅日出模式生效。
+	GlowCrossSection bool
 	SitesPath string // 点位配置文件路径；Sites 非空时忽略
 	Sites     []Site // 直接注入的点位，优先于 SitesPath，便于测试与菜单临时点位
 	NoCache   bool   // 禁用响应缓存，强制回源取数

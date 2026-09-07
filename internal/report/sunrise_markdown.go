@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/prophetcro/astro-mountain/internal/config"
 	"github.com/prophetcro/astro-mountain/internal/model"
@@ -37,17 +36,6 @@ func sunriseResultsByDate(results []SunriseSiteResult) ([]string, map[string][]S
 	}
 	sort.Strings(order)
 	return order, m
-}
-
-// sunriseNightDate 由「日出当天」反推观测夜（前一日，YYYY-MM-DD）。
-// 日出云海的实际拍摄窗口在日出当天的前一夜；逐日小节直接用这个「前一天」日期做标题，
-// 既显式标出前夜、又只是个干净的单日期，不堆「观测夜/日出当天」字样（日出时刻在正文里已有）。
-func sunriseNightDate(sunriseDay string) string {
-	t, err := time.Parse("2006-01-02", sunriseDay)
-	if err != nil {
-		return sunriseDay
-	}
-	return t.AddDate(0, 0, -1).Format("2006-01-02")
 }
 
 // sunriseResultsBySite 把结果按站点分组，组内按「日出当天」升序，并返回稳定的站点顺序
@@ -149,7 +137,6 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 		{"时区", fmt.Sprintf("%s (UTC+%s)", meta.Timezone, FormatG(meta.UTCOffsetHours))},
 		{"夜间窗口", fmt.Sprintf("%02d:00 ~ %02d:00（含日出时分，北京时间跨零点）",
 			w.NightStartHour, w.NightEndHour)},
-		{"观测夜", orDash(strings.Join(meta.Nights, " / "))},
 		{"云层判据", fmt.Sprintf("层云量 ≥ %s%% 或 RH ≥ %s%%(低层)/%s%%(高层)",
 			FormatFixed(t.CloudCoverThreshold, 0), FormatFixed(t.RHThresholdLow, 0),
 			FormatFixed(t.RHThresholdHigh, 0))},
@@ -173,7 +160,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 			for _, site := range siteOrder {
 				lines = append(lines, fmt.Sprintf("### %s", site), "")
 				for _, r := range bySite[site] {
-					lines = append(lines, fmt.Sprintf("#### %s", sunriseNightDate(sunriseResultDate(r))), "")
+					lines = append(lines, fmt.Sprintf("#### %s 日出", sunriseResultDate(r)), "")
 					lines = append(lines, sunriseSiteDayBody(r)...)
 				}
 			}
@@ -189,7 +176,7 @@ func BuildSunriseMarkdownReport(results []SunriseSiteResult, meta model.ReportMe
 		lines = append(lines, "本次运行未解析出任何站点结果。", "")
 		} else if multi {
 			for _, d := range order {
-				lines = append(lines, fmt.Sprintf("### %s", sunriseNightDate(d)), "")
+				lines = append(lines, fmt.Sprintf("### %s 日出", d), "")
 				lines = append(lines, sunriseSummaryTable(byDate[d],
 					w.SunriseWindowBeforeMin, w.SunriseWindowAfterMin)...)
 				lines = append(lines, "")
@@ -262,6 +249,9 @@ func sunriseSiteDayBody(r SunriseSiteResult) []string {
 	}
 	out = append(out,
 		fmt.Sprintf("**朝霞强度**：%s — %s", r.DawnGlow, r.DawnGlowNote), "")
+	// 朝霞窗口：档位只说「烧不烧」，窗口才说「几点到几点、能守多久」。
+	// 用户实地反馈「朝霞转瞬即逝」——只给档位等于没告诉用户该几点几分到位。
+	out = append(out, glowWindowLine(r.GlowWindow), "")
 	// 分歧透明化：逐模型摊开主模型 + 各对比模型的原始档位，决策权交还用户。
 	if len(r.DawnGlowModels) > 0 {
 		ms := make([]string, 0, len(r.DawnGlowModels))
@@ -282,11 +272,54 @@ func sunriseSiteDayBody(r SunriseSiteResult) []string {
 	if fogPotentialShown(r.FogPotential) {
 		out = append(out, fmt.Sprintf("**近地雾可能**：%s — %s", r.FogPotential, r.FogNote), "")
 	}
+	// 辐射雾时段：独立于「云海时段」单独成行，避免把贴地辐射雾误读成脚下云海
+	// （抖音常把山脚辐射雾混称「云瀑」）。无成片辐射雾时不渲染该行。
+	if len(r.FogPeriods) > 0 {
+		out = append(out, fmt.Sprintf("**辐射雾时段**：%s", fogPeriodsLabel(r.FogPeriods)), "")
+	}
+	// 日出窗被云雾覆盖警告：机位处被云雾包裹、日出看不见，提醒盯住云隙。
+	if r.ObscuredWarning != "" {
+		out = append(out, fmt.Sprintf("**⚠️ 日出窗被云雾覆盖**：%s", r.ObscuredWarning), "")
+	}
 	out = append(out,
 		fmt.Sprintf("**云海可信度**：%s — %s", r.Confidence, r.ConfidenceNote), "",
 		fmt.Sprintf("**一句话结论**：%s", r.Rating), "",
 	)
 	return out
+}
+
+// glowFleetingMin 朝霞「转瞬即逝」阈值（分钟）：窗口短于此值时提示提前到位守候。
+const glowFleetingMin = 15
+
+// glowWindowLine 渲染「朝霞窗口」行：起止时刻 + 持续分钟。
+//
+// 窗口短于 glowFleetingMin(15min) 时追加「转瞬即逝」提示——实测朝霞常常就那几分钟，
+// 用户必须提前到位才拍得到。无云载体时如实写「无」，绝不给一个假时间窗。
+func glowWindowLine(gw GlowWindow) string {
+	if !gw.Lit || gw.DurationMin <= 0 || gw.Start.IsZero() || gw.End.IsZero() {
+		return "**朝霞窗口**：无（无可染红云载体）"
+	}
+	line := fmt.Sprintf("**朝霞窗口**：%s–%s（%d 分钟）",
+		gw.Start.Format("15:04"), gw.End.Format("15:04"), gw.DurationMin)
+	if gw.DurationMin < glowFleetingMin {
+		line += " ⚠️ 转瞬即逝，建议提前 15 分钟到位守候"
+	}
+	return line
+}
+
+// printGlowWindow 终端版「朝霞窗口」行（不含 markdown 加粗，避免终端显示 **）。
+// 与 glowWindowLine 同源判断：Lit/DurationMin/起止零值任一不满足 → 如实写「无」。
+func printGlowWindow(w io.Writer, gw GlowWindow) {
+	if !gw.Lit || gw.DurationMin <= 0 || gw.Start.IsZero() || gw.End.IsZero() {
+		fmt.Fprintf(w, "  朝霞窗口：无（无可染红云载体）\n")
+		return
+	}
+	line := fmt.Sprintf("  朝霞窗口：%s–%s（%d 分钟）",
+		gw.Start.Format("15:04"), gw.End.Format("15:04"), gw.DurationMin)
+	if gw.DurationMin < glowFleetingMin {
+		line += " ⚠️ 转瞬即逝，建议提前 15 分钟到位守候"
+	}
+	fmt.Fprintln(w, line)
 }
 
 // fogPotentialShown 判断近地雾是否需要渲染：未判定（空）或「无」时跳过该行。
@@ -303,6 +336,26 @@ func fogPotentialCell(level string) string {
 		return ""
 	}
 	return level
+}
+
+// fogPeriodsLabel 把「辐射雾时段」列表渲染成可读串，多段用「；」分隔。
+// 每段形如「01:00–08:00 强（峰值 05:00）」；峰值与起始同为一段时省略括号避免冗余。
+// 与云海时段（episodeHoursLabel）并列但语义独立——前者是贴地辐射雾、后者是脚下连续云面。
+func fogPeriodsLabel(periods []FogPeriod) string {
+	parts := make([]string, 0, len(periods))
+	for _, p := range periods {
+		span := fmt.Sprintf("%s–%s", p.Start.Format("15:04"), p.End.Format("15:04"))
+		lvl := p.PeakLevel
+		if lvl == "" {
+			lvl = profile.FOG_MODERATE
+		}
+		txt := fmt.Sprintf("%s %s", span, lvl)
+		if !p.PeakHour.IsZero() && p.PeakHour.Format("15:04") != p.Start.Format("15:04") {
+			txt += fmt.Sprintf("（峰值 %s）", p.PeakHour.Format("15:04"))
+		}
+		parts = append(parts, txt)
+	}
+	return strings.Join(parts, "；")
 }
 
 // PrintSunriseReport 在终端紧凑打印日出模式结果。
@@ -337,7 +390,7 @@ func PrintSunriseReport(w io.Writer, results []SunriseSiteResult, meta model.Rep
 		for _, site := range siteOrder {
 			fmt.Fprintf(w, "■ %s\n", site)
 			for _, r := range bySite[site] {
-				fmt.Fprintf(w, "  ── %s ──\n", sunriseNightDate(sunriseResultDate(r)))
+				fmt.Fprintf(w, "  ── %s 日出 ──\n", sunriseResultDate(r))
 				printSunriseSiteDay(w, r)
 			}
 		}
@@ -394,9 +447,18 @@ func printSunriseSiteDay(w io.Writer, r SunriseSiteResult) {
 			fmt.Fprintf(w, "  朝霞分歧：%s\n", r.DawnGlowDivergence)
 		}
 	}
+	// 朝霞窗口：档位只说「烧不烧」，窗口才说「几点到几点、能守多久」。
+	// 终端以前只打印「朝霞强度」漏掉时刻，导致交互模式看不到具体守候时段（用户反馈）。
+	printGlowWindow(w, r.GlowWindow)
 	// 近地雾与朝霞并列展示：无云海时它可能是唯一可拍的题材。档位「无」不打印。
 	if fogPotentialShown(r.FogPotential) {
 		fmt.Fprintf(w, "  近地雾：%s\n", r.FogPotential)
+	}
+	if len(r.FogPeriods) > 0 {
+		fmt.Fprintf(w, "  辐射雾时段：%s\n", fogPeriodsLabel(r.FogPeriods))
+	}
+	if r.ObscuredWarning != "" {
+		fmt.Fprintf(w, "  ⚠️ 日出窗被云雾覆盖：%s\n", r.ObscuredWarning)
 	}
 	fmt.Fprintf(w, "  云海可信度：%s\n", r.Confidence)
 	fmt.Fprintf(w, "  结论：%s\n", r.Rating)
@@ -437,11 +499,19 @@ func printSunriseSiteBlock(w io.Writer, results []SunriseSiteResult) {
 			}
 			fmt.Fprintf(w, "  朝霞逐模型：%s\n", strings.Join(ms, "，"))
 			if r.DawnGlowDivergence != "" {
-				fmt.Fprintf(w, "  朝霞分歧：%s\n", r.DawnGlowDivergence)
-			}
+		fmt.Fprintf(w, "  朝霞分歧：%s\n", r.DawnGlowDivergence)
 		}
-		if fogPotentialShown(r.FogPotential) {
-			fmt.Fprintf(w, "  近地雾：%s\n", r.FogPotential)
+	}
+	// 朝霞窗口：终端交互模式同样要给出具体守候时刻，不能只打印强度。
+	printGlowWindow(w, r.GlowWindow)
+	if fogPotentialShown(r.FogPotential) {
+		fmt.Fprintf(w, "  近地雾：%s\n", r.FogPotential)
+	}
+		if len(r.FogPeriods) > 0 {
+			fmt.Fprintf(w, "  辐射雾时段：%s\n", fogPeriodsLabel(r.FogPeriods))
+		}
+		if r.ObscuredWarning != "" {
+			fmt.Fprintf(w, "  ⚠️ 日出窗被云雾覆盖：%s\n", r.ObscuredWarning)
 		}
 		fmt.Fprintf(w, "  云海可信度：%s\n", r.Confidence)
 		fmt.Fprintf(w, "  结论：%s\n", r.Rating)

@@ -333,14 +333,13 @@ func (s *state) askSunriseDate(f *reportForm) error {
 
 	nights := f.nights()
 	if len(nights) == 0 {
-		u.fail("未能推导出观测夜，请重新选择日期")
+		u.fail("未能推导出日出当天，请重新选择日期")
 		return errBack
 	}
 	if len(nights) == 1 {
-		u.ok(fmt.Sprintf("已确定观测夜：%s（日出当天 %s）", nights[0], f.sunriseLabel()))
+		u.ok(fmt.Sprintf("已确定日出当天：%s", f.sunriseLabel()))
 	} else {
-		u.ok(fmt.Sprintf("已确定 %d 个观测夜：%s ~ %s",
-			len(nights), nights[0], nights[len(nights)-1]))
+		u.ok(fmt.Sprintf("已确定 %d 个日出当天：%s", len(nights), f.sunriseLabel()))
 	}
 
 	if warn := s.forecastRangeWarning(f); warn != "" {

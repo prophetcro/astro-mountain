@@ -49,26 +49,77 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	res.HasData = len(resp.Times) > 0
 	res.CloudSeaForm = cloudSeaFormOf(eps)
 
+	// 淹没型：机位是否被云顶淹没（云顶高于机位）。同一标志同时用于
+	// ① 云海可信度封顶「中」（人在云里能见度差）；
+	// ② 朝霞物理地板（淹没型→云顶必被晨光染红，见 applySubmergedGlowFloor）。
+	// 提前到此处计算，避免与下游重复循环。
+	submerged := false
+	for _, e := range eps {
+		if e.Submerged {
+			submerged = true
+			break
+		}
+	}
+
 	// 朝霞：取离日出时刻最近的整点云量评估（±40min 内），缺测则兜底全夜最大中高云量。
 	// 主模式先按云量给档位，再用 AOD 降级，最后与多模型共识对齐（抓单模型离群）。
 	glowLow, glowMid, glowHigh := dawnGlowCloud(resp, sunrise)
 	primTier, primNote := assessDawnGlow(glowLow, glowMid, glowHigh)
 	primTier, primNote = degradeDawnGlowByAOD(primTier, primNote, glow.AOD)
 
-	// 朝霞最终档位：默认走多模型共识封顶；--glow-policy loose 时改取
-	// 主模型(ICON)与 ECMWF 的最高档（任一报大烧即采纳），不施加多数封顶。
+	// 朝霞最终档位：
+	//   - 默认 "" / "consensus"：多模型共识封顶（只降不升，抓 ICON 等单模型离群）；
+	//   - "loose"：主模型(ICON)与 ECMWF 取最高档（任一报大烧即采纳）；
+	//   - "sunset"：sunsetbot 口径——以 GFS/ECMWF 两个基准模型取低（任一方判无即无），
+	//     彻底排除 ICON 系统性高估中层云的离群（不抬高也不压低主模型）。
 	var finalTier, finalNote string
 	switch glow.GlowPolicy {
 	case "loose":
 		finalTier, finalNote = looseDawnGlow(primTier, glow.PrimaryModel, glow.Compare)
+	case "sunset":
+		// 评估时次太阳地平高度：几何门用它判断云层是否已被照亮（见 sunsetDawnGlow）。
+		sunElev := astro.Compute(sunrise, utcOffsetSec, site.Lat, site.Lon, -12).SunAlt
+		finalTier, finalNote = sunsetDawnGlow(primTier, glow.Models, glow.AOD, sunElev)
 	default: // "consensus" 或空
 		finalTier, finalNote, _ = consensusDawnGlow(primTier, primNote, glow.Compare)
 	}
 	res.DawnGlow, res.DawnGlowNote = finalTier, finalNote
 
-	// 分歧透明化：把主模型 + 各对比模型的原始档位都带上，决策权交给用户。
-	// 仅当真的有多模型输入时才填，单模型（DawnGlowContext{}）保持为空，回归安全。
-	if glow.PrimaryModel != "" || len(glow.Compare) > 0 {
+	// 大气截面几何判定（对齐 sunsetbot 的 800km 截面 + AOD 等效云底）：
+	// 若沿太阳方向没有任何云层可被曙/暮光照射，则几何上无辉光，封顶「无」
+	// 并附几何原因；若可达，则把可达点数补进原因，便于透明化。
+	if len(glow.CrossSection) > 0 {
+		lit, _, csNote := AssessCrossSection(glow.CrossSection)
+		if !lit {
+			if finalTier != "无" {
+				finalTier = "无"
+			}
+			finalNote = csNote
+		} else {
+			finalNote = finalNote + "；" + csNote
+		}
+		res.DawnGlow, res.DawnGlowNote = finalTier, finalNote
+	}
+
+	// 淹没型朝霞物理修正：机位埋于云顶附近 → 云顶必被晨光染红，朝霞地板抬到中烧。
+	// 放在几何/截面门之后，覆盖它们对「贴身云海」的低估（那些门沿太阳方向采样远处云层，抓不到脚下这层）。
+	res.DawnGlow, res.DawnGlowNote = applySubmergedGlowFloor(res.DawnGlow, res.DawnGlowNote, submerged, glow.AOD)
+
+	// 朝霞窗口：把「能烧多久、几点到几点该守」补上（放在所有朝霞封顶之后，
+	// 保证用的是最终档位——档位被几何门封成「无」时窗口必须同步留空）。
+	// 只给档位不给时间，用户不知道该几点到位——实测反馈「朝霞转瞬即逝」正是这个缺口。
+	// 云载体高度优先取大气截面里可照亮的云层，否则回落本地廓线最高云层云顶。
+	glowTop, hasGlowCarrier := glowCarrierTop(site, resp, sunrise, cfg, glow, res.DawnGlow)
+	res.GlowWindow = ComputeGlowWindow(site, sunrise, glowTop, hasGlowCarrier)
+
+	// 分歧透明化：把每个模型的原始档位都摊开，决策权交给用户。
+	// 优先用全模型明细 glow.Models（sunset 口径填充了全部 4 个模型）；
+	// 缺失时回落到「主模型 + 对比模型」（consensus/loose 旧口径），保证回归安全。
+	if len(glow.Models) > 0 {
+		bd := orderedGlowModels(glow.Models, glow)
+		res.DawnGlowModels = bd
+		res.DawnGlowDivergence = dawnGlowDivergenceLabelFromMap(glow.Models)
+	} else if glow.PrimaryModel != "" || len(glow.Compare) > 0 {
 		bd := make([]report.DawnGlowModelVerdict, 0, len(glow.Compare)+1)
 		if glow.PrimaryModel != "" {
 			bd = append(bd, report.DawnGlowModelVerdict{
@@ -88,17 +139,19 @@ func BuildSunriseReport(site Site, resp *api.Response, targetNight string,
 	// 两者互不覆盖，也不参与云海可信度与朝霞档位的计算。
 	fog := assessDawnGroundFog(resp, sunrise, cfg)
 	res.FogPotential, res.FogNote = fog.Level, fog.Note
+	// 辐射雾时段：把日出夜间逐时雾档≥中(可拍)的连续小时聚合成时段，
+	// 独立于「云海时段」渲染——避免把贴地辐射雾误读成脚下云海（抖音常混称「云瀑」）。
+	res.FogPeriods = assessDawnGroundFogPeriods(resp, sunrise, cfg)
+
+	// 日出窗被云雾覆盖警告：辐射雾或淹没型云海完整盖住日出拍摄窗口 →
+	// 机位处被云雾包裹，日出那刻极可能看不见，提醒盯住云隙散开瞬间。
+	res.ObscuredWarning = sunriseObscuredWarning(res.FogPeriods, eps, sunrise,
+		cfg.Window.SunriseWindowBeforeMin, cfg.Window.SunriseWindowAfterMin, res.FogPotential)
 
 	// 可信度：云海时次 + 时段数 + 模式垂直分辨率（机位上下相邻层间距）。
 	// 只要有一段是「淹没型」（机位埋在云层顶部附近），可信度封顶「中」——
 	// 人就在云里，能见度与稳定性都差，给「高/极高」是伪精度、会让人白跑。
-	submerged := false
-	for _, e := range eps {
-		if e.Submerged {
-			submerged = true
-			break
-		}
-	}
+	// （submerged 已在上方云海段计算，此处直接复用。）
 	vgap := nightVerticalGap(site, resp, targetNight, cfg)
 	res.Confidence, res.ConfidenceNote = assessSunriseConfidence(
 		res.CloudSeaHours, len(eps), vgap, submerged)
@@ -206,10 +259,11 @@ func assessDawnGlow(low, mid, high float64) (string, string) {
 	return tier, note
 }
 
-// glowCompareModels 是朝霞多模型共识用于交叉验证的辅助模式（不含主模式）。
-// 与 mcpdiag glow-data 的默认四模型口径一致，覆盖 GFS/ECMWF/最佳融合，
-// 专门用来抓「主模式（默认 ICON）系统性高估中层云」这类离群。
-var glowCompareModels = []string{"gfs_seamless", "ecmwf_ifs025", "best_match"}
+// glowModels 是朝霞判定用于交叉验证的全模型集（含主模式 icon_seamless）。
+// 与 mcpdiag glow-data 的默认四模型口径一致，覆盖 ICON/GFS/ECMWF/最佳融合，
+// 专门用来抓「主模式（默认 ICON）系统性高估中层云」这类离群，
+// 并让 sunset 口径以 GFS/ECMWF 为基准、把 ICON 当作离群排除。
+var glowModels = []string{"icon_seamless", "gfs_seamless", "ecmwf_ifs025", "best_match"}
 
 // DawnGlowContext 携带朝霞评估所需的辅助数据：AOD 与多模型共识输入。
 // 单模型运行（无对比 / --no-cross-model）下可留空，退化为原单模型口径（回归安全）。
@@ -220,10 +274,21 @@ type DawnGlowContext struct {
 	// AOD 是日出时刻的 CAMS 气溶胶光学厚度；Invalid 表示未取到（不降级）。
 	AOD model.OptFloat
 	// Compare 是辅助模式名 -> 该模式算出的朝霞档位（已含 AOD 降级）；不含主模式。
+	// consensus/loose 口径使用它（与旧行为一致）；sunset 口径改用 Models。
 	Compare map[string]string
+	// Models 是全模型名 -> 该模式算出的朝霞档位（已含 AOD 降级），含主模式。
+	// 由 runSunrise 一次性抓取全部 glowModels 后填充；sunset 口径据此以
+	// GFS/ECMWF 为基准、排除 ICON 离群。为空时回落到 PrimaryModel+Compare（回归安全）。
+	Models map[string]string
 	// GlowPolicy 朝霞判定口径：空/"consensus" 走多模型共识封顶；"loose" 走
-	// 主模型(ICON)与 ECMWF 取高（任一报大烧即采纳），不施加多数模型封顶。
+	// 主模型(ICON)与 ECMWF 取高（任一报大烧即采纳）；"sunset" 走 sunsetbot 口径
+	// （GFS/ECMWF 取低、ICON 离群不参与）。
 	GlowPolicy string
+	// CrossSection 是「大气截面几何判定」的采样点（沿太阳方位角多点取数所得）。
+	// 非空表示启用了该判定；BuildSunriseReport 据此施加几何门——
+	// 沿太阳方向无任何云层可被曙/暮光照射时，封顶「无」并附几何原因。
+	// 仅 --glow-cross-section 开启时由 runSunrise 填充。
+	CrossSection []CrossSectionPoint
 }
 
 // dawnGlowTierRank 朝霞档位排序：无<小烧<中烧<大烧。
@@ -346,6 +411,200 @@ func looseDawnGlow(primaryTier, primaryModel string, compare map[string]string) 
 	return best, fmt.Sprintf("宽松口径（主%s 与 ECMWF 取高）：ECMWF 判%s → %s", primaryModel, best, best)
 }
 
+// sunsetDawnGlow 实现 sunsetbot 口径：以 GFS/ECMWF 两个基准模型的一致性为准，
+// 取二者较低档（任一方判无即无），彻底排除 ICON 系统性高估中层云的离群——
+// ICON 既不参与抬高、也不参与压低主模型，只是透明展示用。
+//
+// 这是「用 sunsetbot 的方案优化朝霞」的核心：sunsetbot 本就用 GFS/ECMWF + CAMS AOD，
+// 而非 ICON。绩溪 9-06 的根因正是 ICON 报 40% 中层云（大烧），而 GFS/ECMWF/最佳融合
+// 都接近 0%（不烧）；旧 consensus 只是把 ICON 当主、多数封顶，sunset 直接改以
+// GFS/ECMWF 为真理源，对齐 sunsetbot 的「不烧」结论。
+//
+// 单模型（models 为空，--no-cross-model）时退回主模型结论 + AOD，诚实不谎报。
+// 最后叠加几何光照门 applyGlowGeoGate：评估时次太阳高度过低时云层尚未被照亮，封顶小烧。
+func sunsetDawnGlow(primTier string, models map[string]string, aod model.OptFloat, sunElev float64) (string, string) {
+	gfs, ecmwf := models["gfs_seamless"], models["ecmwf_ifs025"]
+
+	// 单模型：无 GFS/ECMWF 对照，退回主模型 + AOD（诚实，不靠 ICON 离群）。
+	if gfs == "" && ecmwf == "" {
+		t, n := degradeDawnGlowByAOD(primTier,
+			fmt.Sprintf("sunsetbot 口径（单模型，无 GFS/ECMWF 对照）：%s", primTier), aod)
+		return applyGlowGeoGate(t, n, sunElev)
+	}
+
+	// 以 GFS/ECMWF 取低：二者任一判无即无；都不空时取较低档。
+	anchor := gfs
+	if anchor == "" {
+		anchor = ecmwf
+	}
+	if ecmwf != "" && dawnGlowTierRank(ecmwf) < dawnGlowTierRank(anchor) {
+		anchor = ecmwf
+	}
+	note := fmt.Sprintf("sunsetbot 口径（GFS/ECMWF 取低，ICON 离群不参与）：%s", anchor)
+	t, n := degradeDawnGlowByAOD(anchor, note, aod)
+	return applyGlowGeoGate(t, n, sunElev)
+}
+
+// applyGlowGeoGate 几何光照门：复刻 sunsetbot「阳光能否照到云底」的判定。
+//
+// 朝霞本质是日出前后阳光从下方/侧方照亮中高云层。若评估时次太阳地平高度过低
+// （< −9°，仍在地球阴影里、尚未进入民用晨光），即便有云载体也无法被染红，
+// 此时封顶小烧，避免对粗分辨率数据（3h 步长、最近整点落在日出前很久）误报大烧。
+// 该门只降不升，且与 AOD 降级同向（都是「更诚实」），不吞掉真实大烧。
+func applyGlowGeoGate(tier, note string, sunElev float64) (string, string) {
+	if sunElev < -9 && dawnGlowTierRank(tier) > 1 {
+		return "小烧", fmt.Sprintf("%s；⚠️几何门：评估时次太阳高度 %.0f° 过低、云层尚未被照亮，封顶小烧", note, sunElev)
+	}
+	return tier, note
+}
+
+// applySubmergedGlowFloor 淹没型云海（机位埋于云层顶部附近）的物理修正。
+//
+// 机位处就是云顶或紧贴云顶，日出时云顶必被晨光从上方/侧方染红——
+// 这是确定的物理事实，不取决于任何数值模式的云量聚合。因此即便
+// assessDawnGlow 因「只数中高云量、漏掉贴地云海」判了「无/小烧」，
+// 这里也要把朝霞地板抬到「中烧」。
+//
+// 唯二不抬的例外（与 degradeDawnGlowByAOD 同向、只降不升）：
+//   - AOD ≥ 1.0：天空浑浊、红光大部门被散射吞掉，淹没型也救不回；
+//   - 档位已 ≥ 中烧：不重复操作。
+// 该地板会覆盖前序的「几何门/截面门」结论——那些门沿太阳方向采样远处云层，
+// 抓不到机位脚下这层贴身云海；本地淹没型是独立 guaranteed 的染红载体。
+func applySubmergedGlowFloor(tier, note string, submerged bool, aod model.OptFloat) (string, string) {
+	if !submerged {
+		return tier, note
+	}
+	// AOD 极端：天空太浑，连贴身云海也染不出红，尊重 AOD 结论（通常为「无」）。
+	if aod.Valid && aod.V >= 1.0 {
+		return tier, note
+	}
+	if dawnGlowTierRank(tier) >= 2 {
+		return tier, note // 已是中烧/大烧，无需抬
+	}
+	prefix := ""
+	if note != "" {
+		prefix = note + "；"
+	}
+	reason := prefix + "云海淹没型：机位埋于云顶附近，云顶必被晨光染红，朝霞至少中烧（几何/截面门低估了这层贴身云海）"
+	return "中烧", reason
+}
+
+// sunriseObscuredWarning 判断日出拍摄窗口是否被云雾「100% 覆盖」，
+// 触发「日出可能泡在雾里看不见」警告。覆盖两类情形：
+//  1. 近地辐射雾时段（fogPeriods）完整盖住窗口；
+//  2. 淹没型云海时段（云顶高过机位、机位埋在云里）完整盖住窗口。
+//
+// 两者都意味着机位处在云雾中，日出那刻极可能什么都看不见。
+// 返回警告文案（空串=未触发）；文案内含「云隙」时机提示（云雾散开的时刻）。
+// 窗口 = [日出 − beforeMin, 日出 + afterMin]，与云海抓拍窗口同参。
+func sunriseObscuredWarning(fogPeriods []report.FogPeriod, eps []report.CloudSeaEpisode,
+	sunrise time.Time, beforeMin, afterMin int, fogPotentialLevel string) string {
+
+	// sunrise 是 FixedZone(+offset) 的当地墙钟（如 06:03 +0800），其绝对瞬间比墙钟早一个时区偏移；
+	// 而 fp.Start / ep.Start 都是「UTC 承载的当地墙钟」（与 resp.Times 同口径）。直接比较会凭空差出
+	// 一个时区偏移（本项目 +8h），窗口判定错跨日。先剥时区、只比墙钟
+	// （与 episodeOverlapsWindow / cloudSeaCoversWindow / wallClockUTC 同口径）。
+	sunWall := wallClockUTC(sunrise)
+	winStart := sunWall.Add(-time.Duration(beforeMin) * time.Minute)
+	winEnd := sunWall.Add(time.Duration(afterMin) * time.Minute)
+
+	// 近地辐射雾：「触及」日出窗即触发（不再要求 100% 覆盖）。
+	// 旧逻辑要求雾时段完整盖住 ±窗口，导致「峰值在午夜(02:00)、日出窗时段被模型判轻雾」
+	// 的真实白雾场景漏报——报告写了「近地雾强」却不警告日出看不见。
+	// 实测 9-06 牵牛岗：辐射雾 22:00–08:00 强覆盖日出窗，但模型把窗口段判轻雾使时段被截断，
+	// 没有任何单段「完整包含」窗口 → 旧逻辑零警告。改为「与窗口有交叠即警告」后修复。
+	// 诚实补充「地面可能一片白」：机位贴地、雾中时地面视野可能全白，日出那刻大概率看不见。
+	// （按用户禁令不提无人机；只给「盯住云隙瞬间」的抓拍建议。）
+	for _, fp := range fogPeriods {
+		if fp.Start.Before(winEnd) && fp.End.After(winStart) {
+			// 按当夜雾档峰值分级措辞：强雾贴地时地面视野可能全白，中雾则只是被遮挡。
+			whiteout := "机位处可能被雾遮挡"
+			if profile.FogLevelRank(fogPotentialLevel) >= profile.FogLevelRank(profile.FOG_STRONG) {
+				whiteout = "机位处地面可能一片白"
+			}
+			return fmt.Sprintf(
+				"日出可能泡在雾里看不见——近地辐射雾 %s–%s 覆盖日出窗（%s–%s），%s。盯住 %s 前后雾散/破云的云隙瞬间，才有机会拍到",
+				fp.Start.Format("15:04"), fp.End.Format("15:04"),
+				winStart.Format("15:04"), winEnd.Format("15:04"),
+				whiteout, fp.End.Format("15:04"))
+		}
+	}
+	// 淹没型云海：机位埋在云里，同样触发。End 即云顶破云/云海消散时刻。
+	for _, ep := range eps {
+		if !ep.Submerged {
+			continue
+		}
+		if !ep.Start.After(winStart) && !ep.End.Before(winEnd) {
+			return fmt.Sprintf(
+				"日出可能泡在雾里看不见——淹没型云海 %s–%s 全程覆盖日出窗（%s–%s），机位处被云包裹。盯住 %s 前后云顶破云的云隙瞬间，才有机会拍到",
+				ep.Start.Format("15:04"), ep.End.Format("15:04"),
+				winStart.Format("15:04"), winEnd.Format("15:04"),
+				ep.End.Format("15:04"))
+		}
+	}
+	return ""
+}
+
+// dawnGlowDivergenceLabelFromMap 由全模型明细生成分歧一句话描述（透明化展示用）。
+func dawnGlowDivergenceLabelFromMap(models map[string]string) string {
+	if len(models) == 0 {
+		return "单模型（无交叉验证）"
+	}
+	parts := make([]string, 0, len(models))
+	for _, t := range models {
+		parts = append(parts, t)
+	}
+	uniq := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		uniq[p] = struct{}{}
+	}
+	if len(uniq) == 1 {
+		return fmt.Sprintf("模型一致：%s", parts[0])
+	}
+	maxRank, maxCount := 0, 0
+	for _, p := range parts {
+		switch r := dawnGlowTierRank(p); {
+		case r > maxRank:
+			maxRank, maxCount = r, 1
+		case r == maxRank:
+			maxCount++
+		}
+	}
+	return fmt.Sprintf("模型分歧：仅 %d/%d 判%s", maxCount, len(parts), dawnGlowTierName(maxRank))
+}
+
+// orderedGlowModels 把全模型明细按固定顺序（icon→gfs→ecmwf→best）输出，
+// 保证报告逐模型明细顺序稳定可读；sunset 口径下把 GFS 标记为基准(主)。
+func orderedGlowModels(models map[string]string, glow DawnGlowContext) []report.DawnGlowModelVerdict {
+	order := []string{"icon_seamless", "gfs_seamless", "ecmwf_ifs025", "best_match"}
+	bd := make([]report.DawnGlowModelVerdict, 0, len(models))
+	seen := make(map[string]bool, len(models))
+	for _, m := range order {
+		t, ok := models[m]
+		if !ok {
+			continue
+		}
+		// sunset 口径下，基准(主)是 GFS（锚定 sunsetbot），ICON 只是被透明展示的
+		// 普通一行、不得标 (主)，否则会与 GFS 双双 (主) 误导读者；其余口径仍以
+		// 主模型(PrimaryModel) 标 (主)。
+		var primary bool
+		if glow.GlowPolicy == "sunset" {
+			primary = m == "gfs_seamless"
+		} else {
+			primary = m == glow.PrimaryModel
+		}
+		bd = append(bd, report.DawnGlowModelVerdict{Model: m, Tier: t, Primary: primary})
+		seen[m] = true
+	}
+	for m, t := range models {
+		if seen[m] {
+			continue
+		}
+		bd = append(bd, report.DawnGlowModelVerdict{Model: m, Tier: t})
+	}
+	return bd
+}
+
 // dawnGlowDivergenceLabel 生成分歧一句话描述，供报告透明化展示。
 // 全部一致时返回「模型一致：X」；出现分歧时返回「模型分歧：仅 k/n 判最高档」，
 // 让用户一眼判断当前结论是否被多数模型支撑（而非只看共识封顶后的单一档位）。
@@ -454,6 +713,84 @@ func assessDawnGroundFog(resp *api.Response, sunrise time.Time, cfg config.Confi
 	fallback.Note += fmt.Sprintf("日出拍摄窗口（−%d~+%dmin）内无模式时次，改用距日出 %d 分钟的最近时次",
 		before, after, nearestAbs)
 	return fallback
+}
+
+// assessDawnGroundFogPeriods 给出日出夜间「辐射雾时段」列表，与云海判定完全独立。
+//
+// 窗口 = [日出 − 8h, 日出 + 2h]，覆盖辐射雾的生成（前半夜）→ 最重（天亮前）→ 消散（日出后），
+// 比 assessDawnGroundFog 的紧凑拍摄窗口更宽——后者只取「现场按快门那段时间」的最强档，
+// 而时段需要看整夜的演变。逐时调用 profile.AssessGroundFog，把雾档 ≥ FOG_MODERATE（中，
+// 地面雾可拍）的连续小时聚合成时段，并记录时段内峰值档位与峰值时刻。
+//
+// 全窗口均 < 中（只有轻雾/无雾）时返回 nil；时间轴为空也返回 nil。
+// 判定一律由 profile.AssessGroundFog 给出，此处只负责挑时次与聚合，不复制任何判据。
+// 与 assessDawnGroundFog 同理：比较前用 wallClockUTC 统一剥时区，避免窗口整体平移。
+func assessDawnGroundFogPeriods(resp *api.Response, sunrise time.Time, cfg config.Config) []report.FogPeriod {
+	if resp == nil || len(resp.Times) == 0 {
+		return nil
+	}
+	const (
+		beforeH = 8
+		afterH  = 2
+		minRank = 2 // FOG_MODERATE(中) 及以上才计入时段；弱(轻雾)不构成可拍成片雾
+	)
+	winBefore := time.Duration(beforeH) * time.Hour
+	winAfter := time.Duration(afterH) * time.Hour
+	sunriseWall := wallClockUTC(sunrise)
+
+	type hourFog struct {
+		t     time.Time
+		level string
+	}
+	var hours []hourFog
+	for idx, localDT := range resp.Times {
+		delta := wallClockUTC(localDT).Sub(sunriseWall)
+		if delta > winAfter || delta < -winBefore {
+			continue
+		}
+		a := profile.AssessGroundFog(resp.Surface(idx), cfg.Thresh)
+		hours = append(hours, hourFog{localDT, a.Level})
+	}
+	if len(hours) == 0 {
+		return nil
+	}
+
+	var periods []report.FogPeriod
+	run := make([]hourFog, 0, len(hours))
+	flush := func() {
+		if len(run) == 0 {
+			return
+		}
+		start, end := run[0].t, run[len(run)-1].t
+		peakLevel := profile.FOG_NONE
+		var peakHour time.Time
+		peakRank := -1
+		for _, h := range run {
+			// 峰值取最强档；并列时取该时段内最早出现的那一小时（天亮前最重的典型形态）。
+			if r := profile.FogLevelRank(h.level); r > peakRank {
+				peakRank, peakLevel, peakHour = r, h.level, h.t
+			}
+		}
+		periods = append(periods, report.FogPeriod{
+			Start:     start,
+			End:       end.Add(time.Hour), // End 为消散时刻（含至 End 前一小时）
+			PeakLevel: peakLevel,
+			PeakHour:  peakHour,
+		})
+		run = run[:0]
+	}
+	for _, h := range hours {
+		if profile.FogLevelRank(h.level) >= minRank {
+			run = append(run, h)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	if len(periods) == 0 {
+		return nil
+	}
+	return periods
 }
 
 // nightVerticalGap 取该夜首个可用廓线的机位上下相邻层间距，反映模式垂直分辨率。

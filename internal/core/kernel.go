@@ -865,8 +865,14 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 		// 朝霞多模型共识 + AOD：默认开启，专门抓「主模式（默认 ICON）系统性高估中层云」
 		// 把「不烧」误报成「大烧」的离群；仅当 --no-cross-model 时退化为单模型。
 		// 取数失败不阻断主报告，只记警告（AOD/对比缺失时按单模型口径诚实降级）。
+		//
+		// 一次抓取全部 glowModels（含 icon/gfs/ecmwwf/best），各自算出朝霞档位填入
+		// modelTiers：consensus/loose 口径只取「主模型之外」的对比档位（Compare），
+		// sunset 口径则用全模型明细（Models）以 GFS/ECMWF 为基准、排除 ICON 离群。
 		var aodMap map[time.Time]model.OptFloat
-		compareResps := make(map[string]*api.Response)
+		// modelResps 缓存各 glowModels 的原始响应（icon 复用已抓的 resp），
+		// 循环外只抓一次；档位计算需在 sunrise/aod 确定后于循环内进行。
+		modelResps := make(map[string]*api.Response)
 		if !p.NoCompare {
 			if am, aerr := client.FetchAOD(ctx, site, start, end); aerr != nil {
 				res.Warnings = append(res.Warnings,
@@ -874,17 +880,21 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 			} else {
 				aodMap = am
 			}
-			for _, m := range glowCompareModels {
+			for _, m := range glowModels {
+				var cr *api.Response
 				if m == siteModels {
-					continue
+					// 主模型响应已抓过，直接复用，避免重复取数。
+					cr = resp
+				} else {
+					c, _, cerr := client.FetchSite(ctx, site, start, end, m)
+					if cerr != nil {
+						res.Warnings = append(res.Warnings,
+							fmt.Sprintf("[%s] 朝霞共识模式 %s 取数失败（不阻断主报告）：%v", site.Name, m, cerr))
+						continue
+					}
+					cr = c
 				}
-				cr, _, cerr := client.FetchSite(ctx, site, start, end, m)
-				if cerr != nil {
-					res.Warnings = append(res.Warnings,
-						fmt.Sprintf("[%s] 朝霞共识模式 %s 取数失败（不阻断主报告）：%v", site.Name, m, cerr))
-					continue
-				}
-				compareResps[m] = cr
+				modelResps[m] = cr
 			}
 		}
 
@@ -901,15 +911,38 @@ func (e *Engine) runSunrise(ctx context.Context, p RunParams,
 					aod = v
 				}
 			}
-			compareTiers := make(map[string]string, len(compareResps))
-			for m, cr := range compareResps {
+			// 各模型朝霞档位（已含 AOD 降级）：循环内算，因依赖本对的 sunrise/aod。
+			modelTiers := make(map[string]string, len(modelResps))
+			for m, cr := range modelResps {
 				cl, cm, ch := dawnGlowCloud(cr, sunrise)
 				t, _ := assessDawnGlow(cl, cm, ch)
 				t, _ = degradeDawnGlowByAOD(t, "", aod)
+				modelTiers[m] = t
+			}
+		// consensus/loose 口径只需「主模型之外」的对比档位；sunset 口径用全模型明细。
+		compareTiers := make(map[string]string, len(modelTiers))
+		for m, t := range modelTiers {
+			if m != siteModels {
 				compareTiers[m] = t
 			}
+		}
+		// 大气截面几何判定（对齐 sunsetbot 的 800km 截面 + AOD 等效云底）：
+		// 沿太阳方位角向外采样若干点，每点取 GFS 云廓线 + CAMS AOD，反演最低有效云层云底，
+		// 几何判「曙/暮光能否照射到该云」。仅 --glow-cross-section 开启（多点取数，较慢）。
+		var crossPts []CrossSectionPoint
+		if p.GlowCrossSection {
+			az := astro.Compute(sunrise, resp.UTCOffsetSeconds, site.Lat, site.Lon, -12).SunAzimuth
+			cp, cerr := BuildCrossSection(ctx, client, site, start, end, sunrise, az,
+				[]float64{0, 100, 250, 450, 800}, &cfg)
+			if cerr != nil {
+				res.Warnings = append(res.Warnings,
+					fmt.Sprintf("[%s] 大气截面取数失败（跳过几何判定，按原口径）：%v", site.Name, cerr))
+			} else {
+				crossPts = cp
+			}
+		}
 		r := BuildSunriseReport(site, resp, pr.night, pr.date, cfg, resp.UTCOffsetSeconds, arriveBufferMin,
-			DawnGlowContext{AOD: aod, Compare: compareTiers, PrimaryModel: siteModels, GlowPolicy: p.GlowPolicy})
+			DawnGlowContext{AOD: aod, Compare: compareTiers, Models: modelTiers, PrimaryModel: siteModels, GlowPolicy: p.GlowPolicy, CrossSection: crossPts})
 			res.Sunrise = append(res.Sunrise, r)
 			e.logf("[%s][%s] 日出模式聚合：云海 %dh / 云海形态[%s] / 朝霞 %s / 云海可信度 %s",
 				site.Name, pr.date.Format(DateLayout), r.CloudSeaHours, r.CloudSeaForm, r.DawnGlow, r.Confidence)

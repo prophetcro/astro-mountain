@@ -23,6 +23,7 @@ var businessFlags = map[string]bool{
 	"models":       true,
 	"source":       true,
 	"sites":        true,
+	"glow-cross-section": true,
 	"out-dir":      true,
 	"csv":          true,
 	"json":         true,
@@ -52,9 +53,11 @@ type Options struct {
 	Compare      bool // 强制开启双模型交叉对比（覆盖配置默认）
 	NoCrossModel bool // 强制关闭双模型交叉对比（覆盖配置默认）
 
-	// GlowPolicy 朝霞判定口径：consensus(默认) | loose（主ICON与ECMWF取高）。
+	// GlowPolicy 朝霞判定口径：sunset(默认) | consensus | loose。
 	// 仅日出模式生效。
 	GlowPolicy string
+	// GlowCrossSection 开启「大气截面几何判定」（对齐 sunsetbot）。默认关闭，因多点取数成本高。
+	GlowCrossSection bool
 
 	OutDir     string
 	ExportCSV  bool
@@ -100,8 +103,10 @@ func newFlagSet(o *Options) *flag.FlagSet {
 	fs.BoolVar(&o.NoCache, "no-cache", false, "禁用磁盘缓存")
 	fs.BoolVar(&o.Compare, "compare", false, "强制开启双模型交叉对比（ICON ↔ GFS），覆盖配置默认")
 	fs.BoolVar(&o.NoCrossModel, "no-cross-model", false, "强制关闭双模型交叉对比，仅用主模式单模型")
-	fs.StringVar(&o.GlowPolicy, "glow-policy", "consensus",
-		"朝霞判定口径（日出模式）：consensus=多模型共识封顶(默认) | loose=主ICON与ECMWF取高(任一报大烧即采纳)")
+	fs.StringVar(&o.GlowPolicy, "glow-policy", "sunset",
+		"朝霞判定口径（日出模式）：sunset=以 GFS/ECMWF 为基准、排除 ICON 离群(默认,对齐 sunsetbot) | consensus=多模型共识封顶 | loose=主ICON与ECMWF取高(任一报大烧即采纳)")
+	fs.BoolVar(&o.GlowCrossSection, "glow-cross-section", false,
+		"（日出模式）开启大气截面几何判定：沿太阳方位角多点取数(GFS云廓线+CAMS AOD)，几何判曙/暮光能否照射云底，对齐 sunsetbot。取数成本高，默认关闭")
 
 	fs.StringVar(&o.OutDir, "out-dir", "", "产物输出目录")
 	fs.BoolVar(&o.ExportCSV, "csv", false, "导出 CSV")
@@ -159,8 +164,8 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("--menu 与 --no-menu 不能同时使用：" +
 			"前者强制进交互菜单、后者强制直接执行，请只保留一个")
 	}
-	if o.GlowPolicy != "" && o.GlowPolicy != "consensus" && o.GlowPolicy != "loose" {
-		return fmt.Errorf("--glow-policy 仅支持 consensus(默认) 或 loose，当前 %q", o.GlowPolicy)
+	if o.GlowPolicy != "" && o.GlowPolicy != "sunset" && o.GlowPolicy != "consensus" && o.GlowPolicy != "loose" {
+		return fmt.Errorf("--glow-policy 仅支持 sunset(默认) / consensus / loose，当前 %q", o.GlowPolicy)
 	}
 	if o.Mode == "sunrise" {
 		// 日出模式复用流星雨同款范围语义（--sunrise-date + --days 或 --start/--end），
@@ -321,6 +326,7 @@ func (o *Options) BuildRunParams(cfg config.Config, stdout io.Writer) core.RunPa
 		Compare:     o.Compare,
 		NoCompare:   o.NoCrossModel,
 		GlowPolicy:  o.GlowPolicy,
+		GlowCrossSection: o.GlowCrossSection,
 		SitesPath:   o.SitesPath,
 		NoCache:     o.NoCache,
 		OutDir:      o.OutDir,

@@ -186,3 +186,85 @@ func TestBuildSunriseReport_GlowPolicyLoose(t *testing.T) {
 		t.Errorf("loose 备注应标注宽松口径，实际 %q", resL.DawnGlowNote)
 	}
 }
+
+// TestSunsetDawnGlow_ICONOutlierIgnored 复现绩溪 9-06 根因（sunset 口径）：
+// ICON 报大烧，但 GFS 小烧 / ECMWF 无 / best 无 → 以 GFS/ECMWF 取低，
+// 排除 ICON 离群，对齐 sunsetbot 的「不烧」结论。
+func TestSunsetDawnGlow_ICONOutlierIgnored(t *testing.T) {
+	models := map[string]string{
+		"icon_seamless": "大烧", "gfs_seamless": "小烧",
+		"ecmwf_ifs025": "无", "best_match": "无",
+	}
+	if g, _ := sunsetDawnGlow("大烧", models, model.Missing(), 0); g != "无" {
+		t.Fatalf("sunset 口径应排除 ICON 离群、对齐 sunsetbot 不烧，实际 %q", g)
+	}
+}
+
+// TestSunsetDawnGlow_GFSECMWFAgree GFS/ECMWF 一致大烧 → 大烧（两基准模型都支撑）。
+func TestSunsetDawnGlow_GFSECMWFAgree(t *testing.T) {
+	models := map[string]string{"gfs_seamless": "大烧", "ecmwf_ifs025": "大烧"}
+	if g, _ := sunsetDawnGlow("无", models, model.Missing(), 0); g != "大烧" {
+		t.Fatalf("GFS/ECMWF 一致大烧应判大烧，实际 %q", g)
+	}
+}
+
+// TestSunsetDawnGlow_GFSHighECMWFNone GFS 大烧但 ECMWF 判无 → 封顶无（ECMWF 否决）。
+func TestSunsetDawnGlow_GFSHighECMWFNone(t *testing.T) {
+	models := map[string]string{"gfs_seamless": "大烧", "ecmwf_ifs025": "无"}
+	if g, _ := sunsetDawnGlow("大烧", models, model.Missing(), 0); g != "无" {
+		t.Fatalf("ECMWF 判无应封顶为无，实际 %q", g)
+	}
+}
+
+// TestSunsetDawnGlow_SingleModelFallback 单模型（无 GFS/ECMWF 对照）退回主模型 + AOD。
+func TestSunsetDawnGlow_SingleModelFallback(t *testing.T) {
+	if g, _ := sunsetDawnGlow("中烧", map[string]string{}, model.Missing(), 0); g != "中烧" {
+		t.Fatalf("单模型应退回主模型结论，实际 %q", g)
+	}
+}
+
+// TestSunsetDawnGlow_GeoGate 几何光照门：评估时次太阳高度过低（仍在地球阴影）时
+// 即便有云载体也封顶小烧，避免对粗分辨率数据误报大烧。
+func TestSunsetDawnGlow_GeoGate(t *testing.T) {
+	models := map[string]string{"gfs_seamless": "大烧", "ecmwf_ifs025": "大烧"}
+	if g, _ := sunsetDawnGlow("大烧", models, model.Missing(), -12); g != "小烧" {
+		t.Fatalf("几何门应封顶小烧，实际 %q", g)
+	}
+}
+
+// TestBuildSunriseReport_GlowPolicySunset 锁死 --glow-policy sunset 接线：
+// 同一份输入（ICON 大烧 / GFS 小烧 / ECMWF 无 / best 无），sunset 口径排除 ICON 离群 → 无，
+// 且逐模型明细展示全部 4 个模型、把 GFS 标记为基准(主)、分歧描述含「分歧」。
+func TestBuildSunriseReport_GlowPolicySunset(t *testing.T) {
+	cfg := config.Default()
+	night := mergeNight
+	sunriseDate := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	resp := makeCloudSeaResp(t)
+
+	models := map[string]string{
+		"icon_seamless": "大烧",
+		"gfs_seamless":  "小烧",
+		"ecmwf_ifs025":  "无",
+		"best_match":    "无",
+	}
+	res := BuildSunriseReport(mergeSite, resp, night, sunriseDate, cfg, 28800, 30,
+		DawnGlowContext{PrimaryModel: "icon_seamless", Models: models, GlowPolicy: "sunset"})
+	if res.DawnGlow != "无" {
+		t.Fatalf("sunset 口径应排除 ICON 离群、对齐 sunsetbot 不烧，实际 %q", res.DawnGlow)
+	}
+	if len(res.DawnGlowModels) != 4 {
+		t.Fatalf("DawnGlowModels 应有 4 条（全模型明细），实际 %d: %+v", len(res.DawnGlowModels), res.DawnGlowModels)
+	}
+	if res.DawnGlowDivergence == "" || !strings.Contains(res.DawnGlowDivergence, "分歧") {
+		t.Errorf("sunset 多模型下应给出含「分歧」的描述，实际 %q", res.DawnGlowDivergence)
+	}
+	foundGFS := false
+	for _, m := range res.DawnGlowModels {
+		if m.Model == "gfs_seamless" && m.Primary {
+			foundGFS = true
+		}
+	}
+	if !foundGFS {
+		t.Errorf("sunset 口径下 GFS 应标记为基准(主)：%+v", res.DawnGlowModels)
+	}
+}
